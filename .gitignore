@@ -1,0 +1,253 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Dependencies
+node_modules
+
+# Build outputs
+dist
+dist-ssr
+build
+*.local
+
+# Environment variables (IMPORTANT: Contains sensitive API keys)
+.env
+.env.*
+!.env.example
+.env.backup
+.env.bak
+
+# Local data storage (Contains chat history and user data)
+data/
+*.json.backup
+*.json.bak
+database.json
+backup/
+user_data/
+chat_history/
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+*.db-journal
+*.db-shm
+*.db-wal
+
+# API Keys and sensitive configuration
+config/secrets/
+secrets/
+keys/
+certs/
+api-keys/
+*.key
+*.pem
+*.p12
+*.pfx
+*.crt
+*.cer
+*.jks
+*.keystore
+auth.json
+credentials.json
+service-account*.json
+
+# Test files and temporary development files
+test-*.json
+test-*.js
+test-*.ts
+test-*.cjs
+test-*.mjs
+test-*.ps1
+fix-*.js
+fix-*.cjs
+fix-*.mjs
+debug-*.log
+*.test.local
+*.dev.local
+
+# Editor directories and files
+.vscode/
+.idea
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Development tools
+.vite
+.cache
+.parcel-cache
+.next
+.nuxt
+.vercel
+
+# AI/IDE specific files
+.claude/
+.trae/
+.cursor/
+.copilot/
+.kiro/
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+Desktop.ini
+
+# Temporary files
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+.tmpfiles
+temp/
+
+# Runtime data
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# Coverage directory used by tools like istanbul
+coverage/
+*.lcov
+
+# nyc test coverage
+.nyc_output
+
+# ESLint cache
+.eslintcache
+
+# Optional npm cache directory
+.npm
+
+# Optional REPL history
+.node_repl_history
+
+# Output of 'npm pack'
+*.tgz
+
+# Yarn Integrity file
+.yarn-integrity
+
+# Package manager lock files (keep package-lock.json for consistency)
+# yarn.lock
+# pnpm-lock.yaml
+
+# AI model files (if any local models are downloaded)
+models/
+*.bin
+*.safetensors
+*.gguf
+*.model
+
+# Backup and archive files
+*.zip
+*.rar
+*.7z
+*.tar.gz
+*.backup
+
+# User uploaded files
+uploads/
+files/
+assets/user/
+
+# Performance monitoring
+.clinic/
+.0x/
+
+# Microbundle cache
+.rpt2_cache/
+.rts2_cache_cjs/
+.rts2_cache_es/
+.rts2_cache_umd/
+
+# Optional stylelint cache
+.stylelintcache
+
+# SvelteKit build / generate output
+.svelte-kit
+
+# TypeScript build info
+*.tsbuildinfo
+
+# Storybook build outputs
+storybook-static
+
+# Rush temporary files
+common/temp/
+
+# Stores VSCode versions used for testing VSCode extensions
+.vscode-test
+
+# Yarn v2
+.yarn/cache
+.yarn/unplugged
+.yarn/build-state.yml
+.yarn/install-state.gz
+.pnp.*
+
+# Local development server files
+.dev-server/
+dev-server.log
+
+# AI chat application specific
+conversations/
+chat-logs/
+user-sessions/
+*.conversation
+*.chat
+
+# Deployment and production files
+.vercel/
+.netlify/
+.firebase/
+.github/workflows/deploy-*.yml
+
+# Local configuration overrides
+config.local.json
+settings.local.json
+
+# IDE and editor specific (additional)
+*.code-workspace
+.history/
+.vscode/launch.json
+.vscode/tasks.json
+
+# Package manager alternatives
+bun.lockb
+.yarn/
+.pnp.*
+
+# End of https://www.toptal.com/developers/gitignore/api/node,react,vite
+
+# Development Documentation (Ignore these local task tracking files)
+TASK_*.md
+*_NOTES.md
+*_DESIGN.md
+*_GUIDE.md
+*_IMPROVEMENTS.md
+*_PROGRESS.md
+TODO.md
+CHANGELOG.md.tmp
+
+# Ensure scripts are not ignored (even if they match other patterns)
+!scripts/
+!scripts/*.js
+!scripts/*.cjs
+!scripts/*.mjs
+!scripts/*.ts
