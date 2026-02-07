@@ -457,200 +457,221 @@ export default function Chat() {
         let thoughtSignature: string | undefined;
 
         if (reader) {
+          let streamTimedOut = false;
+
           try {
             let streamTimeout: NodeJS.Timeout | null = null;
             let lastChunkTime = Date.now();
+            let streamCompleted = false;
 
-            // 设置流式响应超时检查
-            const checkStreamTimeout = () => {
-              if (Date.now() - lastChunkTime > 30000) { // 30秒超时
-                console.warn('流式响应超时，强制结束');
-                reader.cancel();
-                return;
+            const STREAM_IDLE_TIMEOUT_MS = 120000;
+            const STREAM_TIMEOUT_CHECK_INTERVAL_MS = 5000;
+
+            const clearStreamTimeout = () => {
+              if (streamTimeout) {
+                clearTimeout(streamTimeout);
+                streamTimeout = null;
               }
-              streamTimeout = setTimeout(checkStreamTimeout, 5000);
             };
-            streamTimeout = setTimeout(checkStreamTimeout, 5000);
+
+            const restartStreamTimeout = () => {
+              clearStreamTimeout();
+              streamTimeout = setTimeout(() => {
+                if (Date.now() - lastChunkTime > STREAM_IDLE_TIMEOUT_MS) {
+                  streamTimedOut = true;
+                  console.warn('Stream idle timeout reached, cancelling reader');
+                  void reader.cancel();
+                  return;
+                }
+                restartStreamTimeout();
+              }, STREAM_TIMEOUT_CHECK_INTERVAL_MS);
+            };
+
+            const applyMessageUpdate = (messageUpdater: (msg: any) => any) => {
+              setCurrentConversation(prev => {
+                if (!prev) return prev;
+                return {
+                  ...prev,
+                  messages: prev.messages.map(messageUpdater)
+                };
+              });
+
+              setConversations(prev =>
+                prev.map(conv => {
+                  if (conv.id === conversation!.id) {
+                    return {
+                      ...conv,
+                      messages: conv.messages.map(messageUpdater)
+                    };
+                  }
+                  return conv;
+                })
+              );
+            };
+
+            const processStreamDataLine = (dataStr: string): boolean => {
+              if (dataStr === '[DONE]') {
+                streamCompleted = true;
+
+                const finalUpdateMessage = (msg: any) =>
+                  msg.id === aiMessageId
+                    ? {
+                      ...msg,
+                      content: fullContent,
+                      isTyping: false,
+                      hasThinking: !!fullThinkingContent,
+                      thinkingContent: fullThinkingContent || undefined,
+                      thinkingTokens,
+                      reasoningEffort,
+                      thoughtSignature
+                    }
+                    : msg;
+
+                applyMessageUpdate(finalUpdateMessage);
+                clearStreamTimeout();
+                return true;
+              }
+
+              try {
+                const data = JSON.parse(dataStr);
+
+                if (data.error) {
+                  streamCompleted = true;
+                  const errorMessage = `${t('chat.sendError')}${data.error}`;
+
+                  const errorUpdateMessage = (msg: any) =>
+                    msg.id === aiMessageId
+                      ? { ...msg, content: errorMessage, isTyping: false }
+                      : msg;
+
+                  applyMessageUpdate(errorUpdateMessage);
+                  clearStreamTimeout();
+                  return true;
+                }
+
+                if (data.content !== undefined) {
+                  fullContent += data.content;
+                }
+                if (data.thinking?.content) {
+                  fullThinkingContent += data.thinking.content;
+                }
+                if (data.thinking?.tokens !== undefined) {
+                  thinkingTokens = data.thinking.tokens;
+                }
+                if (data.thinking?.effort) {
+                  reasoningEffort = data.thinking.effort;
+                }
+                if (data.thinking?.signature) {
+                  thoughtSignature = data.thinking.signature;
+                }
+
+                const updateMessage = (msg: any) =>
+                  msg.id === aiMessageId
+                    ? {
+                      ...msg,
+                      content: fullContent,
+                      isTyping: !data.done,
+                      hasThinking: !!fullThinkingContent,
+                      thinkingContent: fullThinkingContent || undefined,
+                      thinkingTokens,
+                      reasoningEffort,
+                      thoughtSignature
+                    }
+                    : msg;
+
+                applyMessageUpdate(updateMessage);
+
+                if (data.done) {
+                  streamCompleted = true;
+                  clearStreamTimeout();
+                  return true;
+                }
+              } catch (e) {
+                console.warn('Failed to parse SSE data line:', e, 'raw data:', dataStr);
+              }
+
+              return false;
+            };
+
+            const processBufferedLines = (rawBuffer: string): { shouldStop: boolean; remainder: string } => {
+              const lines = rawBuffer.split('\n');
+              const remainder = lines.pop() || '';
+
+              for (const line of lines) {
+                if (!line.startsWith('data: ')) {
+                  continue;
+                }
+
+                const shouldStop = processStreamDataLine(line.slice(6).trim());
+                if (shouldStop) {
+                  return { shouldStop: true, remainder: '' };
+                }
+              }
+
+              return { shouldStop: false, remainder };
+            };
+
+            restartStreamTimeout();
 
             while (true) {
               const { done, value } = await reader.read();
+
               if (done) {
-                console.log('流式响应正常结束');
+                buffer += decoder.decode();
+
+                if (buffer.trim()) {
+                  const finalBatch = buffer.split('\n');
+                  for (const line of finalBatch) {
+                    if (!line.startsWith('data: ')) {
+                      continue;
+                    }
+                    const shouldStop = processStreamDataLine(line.slice(6).trim());
+                    if (shouldStop) {
+                      clearStreamTimeout();
+                      return;
+                    }
+                  }
+                }
                 break;
               }
 
               lastChunkTime = Date.now();
               buffer += decoder.decode(value, { stream: true });
-              const lines = buffer.split('\n');
-              buffer = lines.pop() || '';
 
-              for (const line of lines) {
-                if (line.startsWith('data: ')) {
-                  const dataStr = line.slice(6).trim();
+              const processed = processBufferedLines(buffer);
+              buffer = processed.remainder;
 
-                  // 检查是否是结束标记
-                  if (dataStr === '[DONE]') {
-                    console.log('收到[DONE]标记，流式响应结束');
-                    // 确保最终状态正确设置
-                    const finalUpdateMessage = (msg: any) =>
-                      msg.id === aiMessageId
-                        ? {
-                          ...msg,
-                          content: fullContent,
-                          isTyping: false,
-                          hasThinking: !!fullThinkingContent,
-                          thinkingContent: fullThinkingContent || undefined,
-                          thinkingTokens,
-                          reasoningEffort,
-                          thoughtSignature
-                        }
-                        : msg;
-
-                    setCurrentConversation(prev => {
-                      if (!prev) return prev;
-                      return {
-                        ...prev,
-                        messages: prev.messages.map(finalUpdateMessage)
-                      };
-                    });
-
-                    setConversations(prev =>
-                      prev.map(conv => {
-                        if (conv.id === conversation!.id) {
-                          return {
-                            ...conv,
-                            messages: conv.messages.map(finalUpdateMessage)
-                          };
-                        }
-                        return conv;
-                      })
-                    );
-
-                    if (streamTimeout) {
-                      clearTimeout(streamTimeout);
-                    }
-                    return; // 直接返回，结束整个流式处理
-                  }
-
-                  try {
-                    const data = JSON.parse(dataStr);
-
-                    // 检查是否有错误
-                    if (data.error) {
-                      console.error('收到流式响应错误:', data.error);
-                      const errorMessage = `${t('chat.sendError')}${data.error}`;
-
-                      const errorUpdateMessage = (msg: any) =>
-                        msg.id === aiMessageId
-                          ? { ...msg, content: errorMessage, isTyping: false }
-                          : msg;
-
-                      setCurrentConversation(prev => {
-                        if (!prev) return prev;
-                        return {
-                          ...prev,
-                          messages: prev.messages.map(errorUpdateMessage)
-                        };
-                      });
-
-                      setConversations(prev =>
-                        prev.map(conv => {
-                          if (conv.id === conversation!.id) {
-                            return {
-                              ...conv,
-                              messages: conv.messages.map(errorUpdateMessage)
-                            };
-                          }
-                          return conv;
-                        })
-                      );
-
-                      if (streamTimeout) {
-                        clearTimeout(streamTimeout);
-                      }
-                      return; // 结束流式处理
-                    }
-
-                    // 处理内容更新（包括空内容的情况）
-                    if (data.content !== undefined) {
-                      fullContent += data.content;
-                    }
-
-                    // 处理思维链数据
-                    if (data.thinking?.content) {
-                      fullThinkingContent += data.thinking.content;
-                    }
-                    if (data.thinking?.tokens !== undefined) {
-                      thinkingTokens = data.thinking.tokens;
-                    }
-                    if (data.thinking?.effort) {
-                      reasoningEffort = data.thinking.effort;
-                    }
-                    if (data.thinking?.signature) {
-                      thoughtSignature = data.thinking.signature;
-                    }
-
-                    // 更新AI消息内容和状态
-                    const updateMessage = (msg: any) =>
-                      msg.id === aiMessageId
-                        ? {
-                          ...msg,
-                          content: fullContent,
-                          isTyping: !data.done,
-                          hasThinking: !!fullThinkingContent,
-                          thinkingContent: fullThinkingContent || undefined,
-                          thinkingTokens,
-                          reasoningEffort,
-                          thoughtSignature
-                        }
-                        : msg;
-
-                    setCurrentConversation(prev => {
-                      if (!prev) return prev;
-                      return {
-                        ...prev,
-                        messages: prev.messages.map(updateMessage)
-                      };
-                    });
-
-                    setConversations(prev =>
-                      prev.map(conv => {
-                        if (conv.id === conversation!.id) {
-                          return {
-                            ...conv,
-                            messages: conv.messages.map(updateMessage)
-                          };
-                        }
-                        return conv;
-                      })
-                    );
-
-                    if (data.done) {
-                      if (streamTimeout) {
-                        clearTimeout(streamTimeout);
-                      }
-                      return; // 直接返回，结束整个流式处理
-                    }
-                  } catch (e) {
-                    console.warn('解析流式数据失败:', e, '原始数据:', dataStr);
-                  }
-                }
+              if (processed.shouldStop) {
+                clearStreamTimeout();
+                return;
               }
+
+              restartStreamTimeout();
             }
 
-            if (streamTimeout) {
-              clearTimeout(streamTimeout);
+            clearStreamTimeout();
+
+            if (streamTimedOut && !streamCompleted) {
+              throw new Error(
+                t('chat.streamTimeout', { defaultValue: '流式响应超时，请重试。' })
+              );
             }
           } catch (streamError) {
-            console.error('流式响应处理错误:', streamError);
-            // 如果流式响应出错，显示错误信息而不是"响应被中断"
+            console.error('Stream response handling error:', streamError);
             const errorMessage = streamError instanceof Error ?
               `${t('chat.sendError')}${streamError.message}` :
               `${t('chat.sendError')}${t('chat.unknownError')}`;
 
+            const interruptedNotice = t('chat.partialResponseNotice', {
+              defaultValue: '\n\n[连接中断，回复可能不完整，请重试]'
+            });
+            const displayContent = fullContent
+              ? (streamTimedOut ? `${fullContent}${interruptedNotice}` : fullContent)
+              : errorMessage;
+
             const errorUpdateMessage = (msg: any) =>
               msg.id === aiMessageId
-                ? { ...msg, content: fullContent || errorMessage, isTyping: false }
+                ? { ...msg, content: displayContent, isTyping: false }
                 : msg;
 
             setCurrentConversation(prev => {
@@ -676,7 +697,7 @@ export default function Chat() {
             try {
               reader.releaseLock();
             } catch (e) {
-              console.warn('释放reader锁失败:', e);
+              console.warn('Failed to release stream reader lock', e);
             }
           }
         }
