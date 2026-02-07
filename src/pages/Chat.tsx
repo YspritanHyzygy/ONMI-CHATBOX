@@ -1,19 +1,18 @@
 import { useState, useEffect, useRef } from 'react';
-import { Send, MessageSquare, Sparkles, User, Bot } from 'lucide-react';
+import { Send, MessageSquare, Sparkles } from 'lucide-react';
 import Sidebar from '../components/Sidebar';
 import AIParametersPanel from '../components/AIParametersPanel';
 import ModelSelector from '../components/ModelSelector';
-import MarkdownRenderer from '../components/MarkdownRenderer';
 import ErrorBoundary from '../components/ErrorBoundary';
 import ResponseApiIndicator from '../components/ResponseApiIndicator';
-import LoadingIndicator from '../components/LoadingIndicator';
 import { useTranslation } from 'react-i18next';
 import { getUserId } from '../lib/user';
-import { 
-  getValidatedModel, 
+import {
+  getValidatedModel,
   getValidatedConversations,
-  setStorageItem 
+  setStorageItem
 } from '../lib/storage';
+import MessageBubble from '../components/MessageBubble';
 
 interface Message {
   id: string;
@@ -22,6 +21,12 @@ interface Message {
   timestamp: Date;
   isTyping?: boolean;
   useTypewriter?: boolean; // 是否使用打字机效果
+  // Thinking chain fields
+  hasThinking?: boolean;
+  thinkingContent?: string;
+  thinkingTokens?: number;
+  reasoningEffort?: string;
+  thoughtSignature?: string;
 }
 
 interface Conversation {
@@ -56,7 +61,7 @@ interface AIParameters {
 export default function Chat() {
   const { t } = useTranslation();
   const [conversations, setConversations] = useState<Conversation[]>([]);
-  
+
   const [currentConversation, setCurrentConversation] = useState<Conversation | null>(null);
   const [inputMessage, setInputMessage] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -110,12 +115,12 @@ export default function Chat() {
   const checkUrlParams = async () => {
     const urlParams = new URLSearchParams(window.location.search);
     const conversationId = urlParams.get('conversation');
-    
+
     if (conversationId && conversations.length > 0) {
       try {
         // 从已加载的对话列表中找到对应的对话信息
         const conversation = conversations.find((conv: Conversation) => conv.id === conversationId);
-        
+
         if (conversation) {
           setCurrentConversation(conversation);
         }
@@ -135,10 +140,10 @@ export default function Chat() {
 
     // 监听storage事件（跨标签页）
     window.addEventListener('storage', handleStorageChange);
-    
+
     // 监听自定义事件（同一页面内）
     window.addEventListener('localStorageChanged', handleStorageChange);
-    
+
     return () => {
       window.removeEventListener('storage', handleStorageChange);
       window.removeEventListener('localStorageChanged', handleStorageChange);
@@ -180,7 +185,7 @@ export default function Chat() {
   // 从localStorage加载conversations
   const loadConversationsFromStorage = () => {
     const result = getValidatedConversations('conversations');
-    
+
     if (result.success && result.data) {
       // 确保日期对象正确转换
       const conversations = result.data.map((conv: any) => ({
@@ -205,7 +210,7 @@ export default function Chat() {
     try {
       const userId = getUserId();
       const response = await fetch(`/api/providers/config?userId=${encodeURIComponent(userId)}`);
-      
+
       if (response.ok) {
         const result = await response.json();
         if (result.success && result.data) {
@@ -229,26 +234,26 @@ export default function Chat() {
   const loadConversations = async () => {
     try {
       const userId = getUserId();
-        const response = await fetch(`/api/chat/conversations?userId=${userId}`);
-      
+      const response = await fetch(`/api/chat/conversations?userId=${userId}`);
+
       if (response.ok) {
         const data = await response.json();
-          if (data.success && Array.isArray(data.conversations) && data.conversations.length > 0) {
+        if (data.success && Array.isArray(data.conversations) && data.conversations.length > 0) {
           // 确保日期对象正确转换
           const apiConversations = data.conversations.map((conv: any) => ({
             ...conv,
             created_at: new Date(conv.created_at)
           }));
-          
+
           // 按创建时间倒序排列
           apiConversations.sort((a: any, b: any) => b.created_at.getTime() - a.created_at.getTime());
-          
+
           console.log('[DEBUG] 从API获取到对话，更新状态:', apiConversations);
           setConversations(apiConversations);
           // 同步保存到localStorage
           saveConversationsToStorage(apiConversations);
         } else {
-          }
+        }
       } else {
         console.warn('[DEBUG] API调用失败，保持当前状态');
       }
@@ -263,11 +268,16 @@ export default function Chat() {
       if (response.ok) {
         const result = await response.json();
         if (result.success && result.data) {
-          return result.data.map((msg: { id: string; content: string; role: string; created_at: string }) => ({
+          return result.data.map((msg: any) => ({
             id: msg.id,
             content: msg.content,
             role: msg.role,
-            timestamp: new Date(msg.created_at)
+            timestamp: new Date(msg.created_at),
+            hasThinking: msg.has_thinking,
+            thinkingContent: msg.thinking_content,
+            thinkingTokens: msg.thinking_tokens,
+            reasoningEffort: msg.reasoning_effort,
+            thoughtSignature: msg.thought_signature
           }));
         }
       }
@@ -296,16 +306,16 @@ export default function Chat() {
   // };
 
   const handleSendMessage = async () => {
-    
+
     if (!inputMessage.trim() || isLoading) {
       console.log('[DEBUG] 提前返回，条件不满足');
       return;
     }
-    
+
 
     setIsLoading(true);
     let conversation = currentConversation;
-    
+
     // 如果没有当前对话，创建新对话
     if (!conversation) {
       conversation = {
@@ -316,14 +326,14 @@ export default function Chat() {
         provider: selectedModel?.provider || 'openai',
         model: selectedModel?.model || 'gpt-3.5-turbo'
       };
-      
+
       const newConversations = [conversation!, ...conversations];
       setConversations(newConversations);
-      
+
       // 保存新的对话列表
       saveConversationsToStorage(newConversations);
       setCurrentConversation(conversation);
-      
+
       // 异步调用后端API创建对话（不阻塞UI）
       fetch('/api/chat/conversations', {
         method: 'POST',
@@ -339,13 +349,13 @@ export default function Chat() {
         })
       }).then(response => {
         if (response.ok) {
-          } else {
+        } else {
           console.error('创建对话失败');
         }
       }).catch(error => {
         console.error('创建对话API调用失败:', error);
       });
-      
+
       // 更新URL参数以反映新对话
       const url = new URL(window.location.href);
       url.searchParams.set('conversation', conversation.id);
@@ -368,17 +378,17 @@ export default function Chat() {
     };
 
     setCurrentConversation(updatedConversation);
-    
+
     // 使用函数式更新来确保基于最新状态
     setConversations(prevConversations => {
-      const newConversations = prevConversations.map(conv => 
+      const newConversations = prevConversations.map(conv =>
         conv.id === conversation!.id ? updatedConversation : conv
       );
       // 保存更新后的对话列表
       saveConversationsToStorage(newConversations);
       return newConversations;
     });
-    
+
     setInputMessage('');
     // 创建一个临时的AI消息用于显示流式内容
     const aiMessageId = self.crypto?.randomUUID?.() || Math.random().toString(36).substr(2, 9);
@@ -389,17 +399,17 @@ export default function Chat() {
       timestamp: new Date(),
       isTyping: true
     };
-    
+
     // 立即添加空的AI消息到对话中
     const conversationWithAiMessage = {
       ...updatedConversation,
       messages: [...updatedConversation.messages, aiMessage]
     };
     setCurrentConversation(conversationWithAiMessage);
-    
+
     // 使用函数式更新来确保基于最新状态
     setConversations(prevConversations => {
-      const updatedConversations = prevConversations.map(conv => 
+      const updatedConversations = prevConversations.map(conv =>
         conv.id === conversation!.id ? conversationWithAiMessage : conv
       );
       // 保存到localStorage
@@ -412,7 +422,7 @@ export default function Chat() {
       // 构建请求URL，使用流式响应获得真正的实时体验
       const url = new URL('/api/chat', window.location.origin);
       url.searchParams.set('stream', 'true');
-      
+
       const response = await fetch(url.toString(), {
         method: 'POST',
         headers: {
@@ -441,12 +451,16 @@ export default function Chat() {
         const decoder = new TextDecoder();
         let buffer = '';
         let fullContent = '';
+        let fullThinkingContent = '';
+        let thinkingTokens: number | undefined;
+        let reasoningEffort: string | undefined;
+        let thoughtSignature: string | undefined;
 
         if (reader) {
           try {
             let streamTimeout: NodeJS.Timeout | null = null;
             let lastChunkTime = Date.now();
-            
+
             // 设置流式响应超时检查
             const checkStreamTimeout = () => {
               if (Date.now() - lastChunkTime > 30000) { // 30秒超时
@@ -457,7 +471,7 @@ export default function Chat() {
               streamTimeout = setTimeout(checkStreamTimeout, 5000);
             };
             streamTimeout = setTimeout(checkStreamTimeout, 5000);
-            
+
             while (true) {
               const { done, value } = await reader.read();
               if (done) {
@@ -473,16 +487,25 @@ export default function Chat() {
               for (const line of lines) {
                 if (line.startsWith('data: ')) {
                   const dataStr = line.slice(6).trim();
-                  
+
                   // 检查是否是结束标记
                   if (dataStr === '[DONE]') {
                     console.log('收到[DONE]标记，流式响应结束');
                     // 确保最终状态正确设置
-                    const finalUpdateMessage = (msg: any) => 
-                      msg.id === aiMessageId 
-                        ? { ...msg, content: fullContent, isTyping: false }
+                    const finalUpdateMessage = (msg: any) =>
+                      msg.id === aiMessageId
+                        ? {
+                          ...msg,
+                          content: fullContent,
+                          isTyping: false,
+                          hasThinking: !!fullThinkingContent,
+                          thinkingContent: fullThinkingContent || undefined,
+                          thinkingTokens,
+                          reasoningEffort,
+                          thoughtSignature
+                        }
                         : msg;
-                    
+
                     setCurrentConversation(prev => {
                       if (!prev) return prev;
                       return {
@@ -490,8 +513,8 @@ export default function Chat() {
                         messages: prev.messages.map(finalUpdateMessage)
                       };
                     });
-                    
-                    setConversations(prev => 
+
+                    setConversations(prev =>
                       prev.map(conv => {
                         if (conv.id === conversation!.id) {
                           return {
@@ -502,26 +525,26 @@ export default function Chat() {
                         return conv;
                       })
                     );
-                    
+
                     if (streamTimeout) {
                       clearTimeout(streamTimeout);
                     }
                     return; // 直接返回，结束整个流式处理
                   }
-                  
+
                   try {
                     const data = JSON.parse(dataStr);
-                    
+
                     // 检查是否有错误
                     if (data.error) {
                       console.error('收到流式响应错误:', data.error);
                       const errorMessage = `${t('chat.sendError')}${data.error}`;
-                      
-                      const errorUpdateMessage = (msg: any) => 
-                        msg.id === aiMessageId 
+
+                      const errorUpdateMessage = (msg: any) =>
+                        msg.id === aiMessageId
                           ? { ...msg, content: errorMessage, isTyping: false }
                           : msg;
-                      
+
                       setCurrentConversation(prev => {
                         if (!prev) return prev;
                         return {
@@ -529,8 +552,8 @@ export default function Chat() {
                           messages: prev.messages.map(errorUpdateMessage)
                         };
                       });
-                      
-                      setConversations(prev => 
+
+                      setConversations(prev =>
                         prev.map(conv => {
                           if (conv.id === conversation!.id) {
                             return {
@@ -541,24 +564,47 @@ export default function Chat() {
                           return conv;
                         })
                       );
-                      
+
                       if (streamTimeout) {
                         clearTimeout(streamTimeout);
                       }
                       return; // 结束流式处理
                     }
-                    
+
                     // 处理内容更新（包括空内容的情况）
                     if (data.content !== undefined) {
                       fullContent += data.content;
                     }
-                    
+
+                    // 处理思维链数据
+                    if (data.thinking?.content) {
+                      fullThinkingContent += data.thinking.content;
+                    }
+                    if (data.thinking?.tokens !== undefined) {
+                      thinkingTokens = data.thinking.tokens;
+                    }
+                    if (data.thinking?.effort) {
+                      reasoningEffort = data.thinking.effort;
+                    }
+                    if (data.thinking?.signature) {
+                      thoughtSignature = data.thinking.signature;
+                    }
+
                     // 更新AI消息内容和状态
-                    const updateMessage = (msg: any) => 
-                      msg.id === aiMessageId 
-                        ? { ...msg, content: fullContent, isTyping: !data.done }
+                    const updateMessage = (msg: any) =>
+                      msg.id === aiMessageId
+                        ? {
+                          ...msg,
+                          content: fullContent,
+                          isTyping: !data.done,
+                          hasThinking: !!fullThinkingContent,
+                          thinkingContent: fullThinkingContent || undefined,
+                          thinkingTokens,
+                          reasoningEffort,
+                          thoughtSignature
+                        }
                         : msg;
-                    
+
                     setCurrentConversation(prev => {
                       if (!prev) return prev;
                       return {
@@ -566,8 +612,8 @@ export default function Chat() {
                         messages: prev.messages.map(updateMessage)
                       };
                     });
-                    
-                    setConversations(prev => 
+
+                    setConversations(prev =>
                       prev.map(conv => {
                         if (conv.id === conversation!.id) {
                           return {
@@ -578,7 +624,7 @@ export default function Chat() {
                         return conv;
                       })
                     );
-                    
+
                     if (data.done) {
                       if (streamTimeout) {
                         clearTimeout(streamTimeout);
@@ -591,22 +637,22 @@ export default function Chat() {
                 }
               }
             }
-            
+
             if (streamTimeout) {
               clearTimeout(streamTimeout);
             }
           } catch (streamError) {
             console.error('流式响应处理错误:', streamError);
             // 如果流式响应出错，显示错误信息而不是"响应被中断"
-            const errorMessage = streamError instanceof Error ? 
-              `${t('chat.sendError')}${streamError.message}` : 
+            const errorMessage = streamError instanceof Error ?
+              `${t('chat.sendError')}${streamError.message}` :
               `${t('chat.sendError')}${t('chat.unknownError')}`;
-            
-            const errorUpdateMessage = (msg: any) => 
-              msg.id === aiMessageId 
+
+            const errorUpdateMessage = (msg: any) =>
+              msg.id === aiMessageId
                 ? { ...msg, content: fullContent || errorMessage, isTyping: false }
                 : msg;
-            
+
             setCurrentConversation(prev => {
               if (!prev) return prev;
               return {
@@ -614,8 +660,8 @@ export default function Chat() {
                 messages: prev.messages.map(errorUpdateMessage)
               };
             });
-            
-            setConversations(prev => 
+
+            setConversations(prev =>
               prev.map(conv => {
                 if (conv.id === conversation!.id) {
                   return {
@@ -637,24 +683,45 @@ export default function Chat() {
       } else {
         // 处理普通响应（兼容性）
         const data = await response.json();
-        
+
         if (data.success) {
+          // Extract thinking data from aiMessage (if存在)
+          const aiMessage = data.data?.aiMessage;
+
           setCurrentConversation(prev => {
             if (!prev) return prev;
-            const updatedMessages = prev.messages.map(msg => 
-              msg.id === aiMessageId 
-                ? { ...msg, content: data.response, isTyping: false }
+            const updatedMessages = prev.messages.map(msg =>
+              msg.id === aiMessageId
+                ? {
+                  ...msg,
+                  content: data.response,
+                  isTyping: false,
+                  hasThinking: aiMessage?.has_thinking || false,
+                  thinkingContent: aiMessage?.thinking_content,
+                  thinkingTokens: aiMessage?.thinking_tokens,
+                  reasoningEffort: aiMessage?.reasoning_effort,
+                  thoughtSignature: aiMessage?.thought_signature
+                }
                 : msg
             );
             return { ...prev, messages: updatedMessages };
           });
-          
-          setConversations(prev => 
+
+          setConversations(prev =>
             prev.map(conv => {
               if (conv.id === conversation!.id) {
-                const updatedMessages = conv.messages.map(msg => 
-                  msg.id === aiMessageId 
-                    ? { ...msg, content: data.response, isTyping: false }
+                const updatedMessages = conv.messages.map(msg =>
+                  msg.id === aiMessageId
+                    ? {
+                      ...msg,
+                      content: data.response,
+                      isTyping: false,
+                      hasThinking: aiMessage?.has_thinking || false,
+                      thinkingContent: aiMessage?.thinking_content,
+                      thinkingTokens: aiMessage?.thinking_tokens,
+                      reasoningEffort: aiMessage?.reasoning_effort,
+                      thoughtSignature: aiMessage?.thought_signature
+                    }
                     : msg
                 );
                 return { ...conv, messages: updatedMessages };
@@ -662,7 +729,7 @@ export default function Chat() {
               return conv;
             })
           );
-          
+
           // 如果是新对话，更新conversationId
           if (data.conversationId && !conversation.id) {
             setCurrentConversation(prev => prev ? { ...prev, id: data.conversationId } : prev);
@@ -673,15 +740,15 @@ export default function Chat() {
       }
     } catch (error: unknown) {
       console.error('发送消息失败:', error);
-      
+
       // 替换临时AI消息为错误消息，而不是添加新消息
       const errorMessage = `${t('chat.sendError')}${error instanceof Error ? error.message : t('chat.unknownError')}`;
-      
-      const updateMessageWithError = (msg: any) => 
-        msg.id === aiMessageId 
+
+      const updateMessageWithError = (msg: any) =>
+        msg.id === aiMessageId
           ? { ...msg, content: errorMessage, isTyping: false }
           : msg;
-      
+
       setCurrentConversation(prev => {
         if (!prev) return prev;
         return {
@@ -689,8 +756,8 @@ export default function Chat() {
           messages: prev.messages.map(updateMessageWithError)
         };
       });
-      
-      setConversations(prev => 
+
+      setConversations(prev =>
         prev.map(conv => {
           if (conv.id === conversation!.id) {
             return {
@@ -706,19 +773,19 @@ export default function Chat() {
       // 确保AI消息的isTyping状态被清除
       setCurrentConversation(prev => {
         if (!prev) return prev;
-        const updatedMessages = prev.messages.map(msg => 
-          msg.id === aiMessageId 
+        const updatedMessages = prev.messages.map(msg =>
+          msg.id === aiMessageId
             ? { ...msg, isTyping: false }
             : msg
         );
         return { ...prev, messages: updatedMessages };
       });
-      
-      setConversations(prev => 
+
+      setConversations(prev =>
         prev.map(conv => {
           if (conv.id === conversation!.id) {
-            const updatedMessages = conv.messages.map(msg => 
-              msg.id === aiMessageId 
+            const updatedMessages = conv.messages.map(msg =>
+              msg.id === aiMessageId
                 ? { ...msg, isTyping: false }
                 : msg
             );
@@ -733,14 +800,14 @@ export default function Chat() {
   const handleKeyPress = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-        handleSendMessage();
+      handleSendMessage();
     }
   };
 
   const createNewConversation = () => {
     setCurrentConversation(null);
     setInputMessage('');
-    
+
     // 清除URL参数，因为这是新对话
     const url = new URL(window.location.href);
     url.searchParams.delete('conversation');
@@ -753,24 +820,24 @@ export default function Chat() {
       try {
         // 获取所有对话ID
         const conversationIds = conversations.map(conv => conv.id);
-        
+
         // 逐个删除对话（后端API）
         for (const id of conversationIds) {
           await fetch(`/api/chat/conversations/${id}`, {
             method: 'DELETE'
           });
         }
-        
+
         // 清空前端状态
         setConversations([]);
         setCurrentConversation(null);
         saveConversationsToStorage([]);
-        
+
         // 清除URL参数
         const url = new URL(window.location.href);
         url.searchParams.delete('conversation');
         window.history.replaceState({}, '', url.toString());
-        
+
         console.log('已清除所有历史记录');
       } catch (error) {
         console.error('清除历史记录失败:', error);
@@ -783,7 +850,7 @@ export default function Chat() {
     const now = new Date();
     const diffTime = Math.abs(now.getTime() - date.getTime());
     const diffMinutes = Math.ceil(diffTime / (1000 * 60));
-    
+
     if (diffMinutes < 60) {
       return t('time.minutesAgo', { count: diffMinutes });
     } else if (diffMinutes < 1440) {
@@ -797,14 +864,14 @@ export default function Chat() {
     const messages = await loadConversationMessages(conversation.id);
     const conversationWithMessages = { ...conversation, messages };
     setCurrentConversation(conversationWithMessages);
-    
+
     // 更新conversations列表中的对话数据
-    const updatedConversations = conversations.map(conv => 
+    const updatedConversations = conversations.map(conv =>
       conv.id === conversation.id ? conversationWithMessages : conv
     );
     setConversations(updatedConversations);
     saveConversationsToStorage(updatedConversations);
-    
+
     // 更新URL参数，这样刷新页面时能保持当前对话
     const url = new URL(window.location.href);
     url.searchParams.set('conversation', conversation.id);
@@ -825,12 +892,12 @@ export default function Chat() {
           formatTime={formatTime}
         />
       )}
-      
+
 
       {/* 主聊天区域 */}
       <div className="flex-1 flex flex-col">
 
-        
+
         {/* 聊天头部 */}
         <div className="bg-white border-b border-gray-200 px-6 py-4">
           <div className="flex items-center justify-between">
@@ -853,8 +920,8 @@ export default function Chat() {
                   )}
                   {/* Response API 状态指示器 */}
                   {selectedModel?.provider === 'openai' && aiParameters.useResponsesAPI && (
-                    <ResponseApiIndicator 
-                      isActive={true} 
+                    <ResponseApiIndicator
+                      isActive={true}
                       isProcessing={isLoading}
                     />
                   )}
@@ -884,7 +951,7 @@ export default function Chat() {
               />
             </div>
           </div>
-          
+
           {/* 移动端控制面板 */}
           <div className="mt-3 sm:hidden space-y-3">
             <ErrorBoundary
@@ -931,75 +998,13 @@ export default function Chat() {
           ) : (
             <div className="space-y-6 max-w-4xl mx-auto">
               {currentConversation.messages.map((message) => (
-                <div
+                <MessageBubble
                   key={message.id}
-                  className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
-                >
-                  <div className={`flex max-w-[80%] ${
-                    message.role === 'user' ? 'flex-row-reverse' : 'flex-row'
-                  }`}>
-                    <div className={`flex-shrink-0 ${
-                      message.role === 'user' ? 'ml-3' : 'mr-3'
-                    }`}>
-                      <div className={`w-8 h-8 rounded-full flex items-center justify-center ${
-                        message.role === 'user' 
-                          ? 'bg-gradient-to-r from-blue-600 to-purple-600 text-white' 
-                          : 'bg-gray-100 text-gray-600'
-                      }`}>
-                        {message.role === 'user' ? (
-                          <User className="w-4 h-4" />
-                        ) : (
-                          <Bot className="w-4 h-4" />
-                        )}
-                      </div>
-                    </div>
-                    <div className={`px-4 py-3 rounded-2xl ${
-                      message.role === 'user'
-                        ? 'bg-gradient-to-r from-blue-600 to-purple-600 text-white'
-                        : 'bg-white border border-gray-200 text-gray-900 shadow-sm'
-                    }`}>
-                      {message.role === 'assistant' ? (
-                        <div className={message.isTyping ? 'relative' : ''}>
-                          <MarkdownRenderer 
-                            content={typeof message.content === 'string' ? message.content : JSON.stringify(message.content)} 
-                            className="text-sm leading-relaxed"
-                          />
-                          {message.isTyping && message.content && (
-                            <div className="inline-flex items-center ml-1">
-                              <div className="w-1 h-4 bg-blue-500 animate-pulse rounded-full"></div>
-                            </div>
-                          )}
-                          {message.isTyping && !message.content && (
-                            <LoadingIndicator 
-                              useResponsesAPI={aiParameters.useResponsesAPI}
-                              isStreaming={!aiParameters.useResponsesAPI}
-                              className="py-2"
-                            />
-                          )}
-                        </div>
-                      ) : (
-                        <p className="text-sm whitespace-pre-wrap leading-relaxed">{typeof message.content === 'string' ? message.content : JSON.stringify(message.content)}</p>
-                      )}
-                      <p className={`text-xs mt-2 ${
-                        message.role === 'user' ? 'text-blue-100' : 'text-gray-500'
-                      }`}>
-                        {new Date(message.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                        {message.isTyping && (
-                          <span className={`ml-2 font-medium ${
-                            aiParameters.useResponsesAPI ? 'text-purple-500' : 'text-blue-500'
-                          }`}>
-                            {aiParameters.useResponsesAPI 
-                              ? t('chat.responsesApiProcessing')
-                              : t('chat.thinking')
-                            }
-                          </span>
-                        )}
-                      </p>
-                    </div>
-                  </div>
-                </div>
+                  message={message}
+                  useResponsesAPI={aiParameters.useResponsesAPI}
+                />
               ))}
-              
+
               {/* 打字效果 */}
               {/* {typingMessage && (
                 <div className="flex justify-start">
@@ -1016,7 +1021,7 @@ export default function Chat() {
                   </div>
                 </div>
               )} */}
-              
+
 
               <div ref={messagesEndRef} />
             </div>
