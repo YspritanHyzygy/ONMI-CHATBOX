@@ -593,46 +593,80 @@ router.post('/', async (req: Request, res: Response): Promise<void> => {
         });
 
         let aiResponseContent = '';
-        
-        for await (const chunk of aiServiceManager.streamChat(
-          actualProvider as AIProvider,
-          messages,
-          {
-            provider: actualProvider as AIProvider,
-            apiKey: providerConfig.api_key,
-            baseUrl: providerConfig.base_url,
-            model: finalModel,
-            temperature: parameters?.temperature ?? 0.7,
-            maxTokens: parameters?.maxTokens ?? 2000,
-            topP: parameters?.topP ?? 1.0
+        let aiThinkingContent = '';
+
+        try {
+          for await (const chunk of aiServiceManager.streamChat(
+            actualProvider as AIProvider,
+            messages,
+            {
+              provider: actualProvider as AIProvider,
+              apiKey: providerConfig.api_key,
+              baseUrl: providerConfig.base_url,
+              model: finalModel,
+              temperature: parameters?.temperature ?? 0.7,
+              maxTokens: parameters?.maxTokens ?? 2000,
+              topP: parameters?.topP ?? 1.0
+            }
+          )) {
+            aiResponseContent += chunk.content;
+            if (chunk.thinking?.content) {
+              aiThinkingContent += chunk.thinking.content;
+            }
+            res.write(`data: ${JSON.stringify(chunk)}\n\n`);
+
+            if (chunk.done) {
+              break;
+            }
           }
-        )) {
-          aiResponseContent += chunk.content;
-          res.write(`data: ${JSON.stringify(chunk)}\n\n`);
-          
-          if (chunk.done) {
-            break;
+
+          // 保存完整的AI回复
+          await db.from('messages').insert({
+            conversation_id: targetConversationId,
+            content: aiResponseContent,
+            role: 'assistant',
+            provider: actualProvider,
+            model,
+            has_thinking: !!aiThinkingContent,
+            thinking_content: aiThinkingContent
+          });
+
+          // 更新对话的最后更新时间
+          await db.from('conversations').update({
+            updated_at: new Date().toISOString(),
+            provider_used: actualProvider,
+            model_used: model
+          }).eq('id', targetConversationId);
+
+          res.write(`data: [DONE]\n\n`);
+          res.end();
+          return;
+        } catch (streamError: any) {
+          console.error('流式响应错误:', streamError);
+
+          // 发送错误信息到前端
+          res.write(`data: ${JSON.stringify({
+            error: streamError.message,
+            content: '',
+            done: true
+          })}\n\n`);
+
+          // 保存错误消息到数据库
+          try {
+            await db.from('messages').insert({
+              conversation_id: targetConversationId,
+              role: 'assistant',
+              content: `抱歉，AI服务暂时不可用：${streamError.message}`,
+              provider: actualProvider,
+              model
+            });
+          } catch (dbError) {
+            console.error('保存错误消息失败:', dbError instanceof Error ? dbError.message : dbError);
           }
+
+          res.end();
+          return;
         }
-
-        // 保存完整的AI回复
-        await db.from('messages').insert({
-          conversation_id: targetConversationId,
-          content: aiResponseContent,
-          role: 'assistant',
-          provider: actualProvider,  // 使用实际的provider（可能是openai-responses）
-          model
-        });
-
-        // 更新对话的最后更新时间
-        await db.from('conversations').update({ 
-          updated_at: new Date().toISOString(),
-          provider_used: actualProvider,  // 使用实际的provider（可能是openai-responses）
-          model_used: model
-        }).eq('id', targetConversationId);
-
-        res.end();
-        return;
       } else {
         // 普通响应（兼容性）或 Response API 强制非流式
         const aiResponse = await aiServiceManager.chat(

@@ -99,9 +99,10 @@ export default function Chat() {
     // 加载用户设置配置
     loadUserSettings().catch(console.error);
     // 延迟加载API数据，避免覆盖localStorage
-    setTimeout(() => {
+    const timerId = setTimeout(() => {
       loadConversations().catch(console.error);
     }, 1000);
+    return () => clearTimeout(timerId);
   }, []);
 
   // 当conversations加载完成后，检查URL参数
@@ -348,12 +349,12 @@ export default function Chat() {
           model: conversation.model
         })
       }).then(response => {
-        if (response.ok) {
-        } else {
-          console.error('创建对话失败');
+        if (!response.ok) {
+          console.error('创建对话失败，状态码:', response.status);
         }
       }).catch(error => {
         console.error('创建对话API调用失败:', error);
+        // 对话创建失败时不阻塞用户，但后续消息发送时后端会自动创建对话
       });
 
       // 更新URL参数以反映新对话
