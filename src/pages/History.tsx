@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { Search, MessageSquare, Trash2, Calendar, ArrowLeft, ExternalLink } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
+import { fetchWithAuth } from '../lib/fetch';
 
 interface Conversation {
   id: string;
@@ -30,7 +31,7 @@ export default function History() {
   const loadConversations = async () => {
     try {
       setIsLoading(true);
-      const response = await fetch('/api/conversations');
+      const response = await fetchWithAuth('/api/conversations');
       if (response.ok) {
         const data = await response.json();
         setConversations(data.conversations || []);
@@ -99,7 +100,7 @@ export default function History() {
     
     if (confirm(`确定要删除选中的 ${selectedConversations.length} 个对话吗？`)) {
       try {
-        const response = await fetch('/api/conversations/batch-delete', {
+        const response = await fetchWithAuth('/api/conversations/batch-delete', {
           method: 'DELETE',
           headers: {
             'Content-Type': 'application/json',
@@ -126,7 +127,7 @@ export default function History() {
   const handleDeleteSingle = async (conversationId: string) => {
     if (confirm('确定要删除这个对话吗？')) {
       try {
-        const response = await fetch(`/api/conversations/${conversationId}`, {
+        const response = await fetchWithAuth(`/api/conversations/${conversationId}`, {
           method: 'DELETE',
         });
         
