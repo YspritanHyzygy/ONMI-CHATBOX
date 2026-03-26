@@ -4,6 +4,7 @@
 import { useState, useEffect } from 'react';
 import { Crown, Check, Zap, Star } from 'lucide-react';
 import useAuthStore from '../store/authStore';
+import { fetchWithAuth } from '../lib/fetch';
 
 interface Plan {
   id: string;
@@ -66,9 +67,9 @@ export default function SubscriptionManager() {
       
       // 并行加载所有数据
       const [plansRes, subscriptionRes, usageRes] = await Promise.all([
-        fetch('/api/business/plans'),
-        fetch(`/api/business/subscription/${user.id}`),
-        fetch(`/api/business/usage/${user.id}`)
+        fetchWithAuth('/api/business/plans'),
+        fetchWithAuth(`/api/business/subscription/${user.id}`),
+        fetchWithAuth(`/api/business/usage/${user.id}`)
       ]);
 
       const [plansData, subscriptionData, usageData] = await Promise.all([

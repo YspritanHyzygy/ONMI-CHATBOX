@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { ChevronDown, Check, ChevronRight, ArrowLeft } from 'lucide-react';
 import { getUserId } from '../lib/user';
 import { getValidatedModel, setStorageItem } from '../lib/storage';
+import { fetchWithAuth } from '../lib/fetch';
 
 interface ModelOption {
   provider: string;
@@ -63,7 +64,7 @@ export default function ModelSelector({ selectedModel, onModelChange, className 
     
     try {
       const userId = getUserId();
-      const response = await fetch(`/api/providers?userId=${encodeURIComponent(userId)}`);
+      const response = await fetchWithAuth(`/api/providers?userId=${encodeURIComponent(userId)}`);
       if (!response.ok) {
         throw new Error('无法获取模型列表，请检查后端服务是否正常运行。');
       }

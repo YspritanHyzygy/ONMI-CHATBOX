@@ -3,6 +3,7 @@ import { Sliders, RotateCcw, AlertTriangle, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import ParameterHelp from './ParameterHelp';
 import { getValidatedAIParameters, setStorageItem } from '../lib/storage';
+import { fetchWithAuth } from '../lib/fetch';
 // 移除错误的后端导入，改为通过API调用
 // import { aiServiceManager } from '../../api/services/ai-service-manager.js';
 // import type { AIProvider } from '../../api/services/types.js';
@@ -195,7 +196,7 @@ export default function AIParametersPanel({ onParametersChange, className = '', 
     
     try {
       // 调用后端API获取模型参数限制
-      const response = await fetch(`/api/model-limits/${provider}${modelId ? `/${modelId}` : ''}`);
+      const response = await fetchWithAuth(`/api/model-limits/${provider}${modelId ? `/${modelId}` : ''}`);
       
       if (response.ok) {
         const modelEntry = await response.json();

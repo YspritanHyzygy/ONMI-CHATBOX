@@ -7,6 +7,7 @@ import useAuthStore from '../store/authStore';
 import PasswordStrength from '../components/PasswordStrength';
 import { convertModelIdToDisplayName } from '../lib/model-display-names';
 import { removeStorageItem, getStorageInfo, setStorageItem, getStorageItem } from '../lib/storage';
+import { fetchWithAuth } from '../lib/fetch';
 
 interface AIProvider {
   id: string;
@@ -405,7 +406,7 @@ export default function Settings() {
       }
       
       // 调用后端API直接清空JSON文件中的available_models字段
-      const response = await fetch('/api/data/clear-models', {
+      const response = await fetchWithAuth('/api/data/clear-models', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
@@ -449,7 +450,7 @@ export default function Settings() {
       type KnownProviderId = 'openai' | 'claude' | 'gemini' | 'xai' | 'ollama';
       interface ApiProviderData { id: KnownProviderId; name: string; description?: string; }
       // 从API获取支持的提供商信息
-      const response = await fetch('/api/providers/supported');
+      const response = await fetchWithAuth('/api/providers/supported');
       
       if (response.ok) {
         const result = await response.json();
@@ -746,7 +747,7 @@ export default function Settings() {
       const userId = getUserId();
       
       // Get user configured AI service providers
-      const response = await fetch(`/api/providers/config?userId=${encodeURIComponent(userId)}`);
+      const response = await fetchWithAuth(`/api/providers/config?userId=${encodeURIComponent(userId)}`);
       
       if (response.ok) {
         const result = await response.json();
@@ -974,7 +975,7 @@ export default function Settings() {
       if (shouldClearConfig) {
         // 清除配置：删除后端配置并清理前端状态
         const userId = getUserId();
-        const response = await fetch(`/api/providers/config?userId=${encodeURIComponent(userId)}&providerName=${encodeURIComponent(providerId)}`, {
+        const response = await fetchWithAuth(`/api/providers/config?userId=${encodeURIComponent(userId)}&providerName=${encodeURIComponent(providerId)}`, {
           method: 'DELETE',
           headers: {
             'Content-Type': 'application/json',
@@ -1034,7 +1035,7 @@ export default function Settings() {
       }
 
       const userId = getUserId();
-      const response = await fetch('/api/providers/config', {
+      const response = await fetchWithAuth('/api/providers/config', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1188,7 +1189,7 @@ export default function Settings() {
         return;
       }
       
-      const response = await fetch('/api/providers/test', {
+      const response = await fetchWithAuth('/api/providers/test', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1418,7 +1419,7 @@ export default function Settings() {
         return;
       }
 
-      const response = await fetch('/api/providers/models', {
+      const response = await fetchWithAuth('/api/providers/models', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1517,7 +1518,7 @@ export default function Settings() {
                 availableModels: allModelsForSaving, // 保存所有模型（包括 Research）
                 defaultModel: defaultModel
               });
-              const response = await fetch('/api/providers/config', {
+              const response = await fetchWithAuth('/api/providers/config', {
                 method: 'POST',
                 headers: {
                   'Content-Type': 'application/json',
@@ -1859,7 +1860,7 @@ export default function Settings() {
                                       
                                       setTestingProvider(`${provider.id}-responses`);
                                       try {
-                                        const response = await fetch('/api/chat', {
+                                        const response = await fetchWithAuth('/api/chat', {
                                           method: 'POST',
                                           headers: {
                                             'Content-Type': 'application/json',

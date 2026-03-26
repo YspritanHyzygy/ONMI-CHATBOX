@@ -4,6 +4,7 @@
 import { useState } from 'react';
 import { Download, Upload, FileText, AlertCircle, CheckCircle } from 'lucide-react';
 import useAuthStore from '../store/authStore';
+import { fetchWithAuth } from '../lib/fetch';
 
 interface DataStats {
   conversations: number;
@@ -32,7 +33,7 @@ export default function DataManager() {
     if (!user) return;
     
     try {
-      const response = await fetch(`/api/data/preview/${user.id}`);
+      const response = await fetchWithAuth(`/api/data/preview/${user.id}`);
       const result = await response.json();
       
       if (result.success) {
@@ -53,7 +54,7 @@ export default function DataManager() {
     setMessage(null);
     
     try {
-      const response = await fetch(`/api/data/export/${user.id}`);
+      const response = await fetchWithAuth(`/api/data/export/${user.id}`);
       const result = await response.json();
       
       if (result.success) {
@@ -98,7 +99,7 @@ export default function DataManager() {
         throw new Error('无效的备份文件格式');
       }
       
-      const response = await fetch(`/api/data/import/${user.id}`, {
+      const response = await fetchWithAuth(`/api/data/import/${user.id}`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

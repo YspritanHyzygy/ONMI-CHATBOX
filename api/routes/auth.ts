@@ -3,21 +3,10 @@
  * 处理用户注册、登录等功能
  */
 import { Router, Request, Response } from 'express';
-import { jsonDatabase } from '../services/json-database.js';
+import { ensureDatabaseInitialized } from '../services/database-init.js';
+import { createSession, requireAuth } from '../middleware/auth.js';
 
 const router = Router();
-
-// 初始化JSON数据库
-let dbInitialized = false;
-
-async function ensureDatabaseInitialized() {
-  if (!dbInitialized) {
-    await jsonDatabase.init();
-    dbInitialized = true;
-    console.log('JSON Database initialized successfully');
-  }
-  return jsonDatabase;
-}
 
 /**
  * 用户注册
@@ -95,9 +84,11 @@ router.post('/register', async (req: Request, res: Response): Promise<void> => {
       return;
     }
 
+    const token = createSession(user.id);
     res.json({
       success: true,
       user,
+      token,
       message: '注册成功'
     });
   } catch (error) {
@@ -160,9 +151,11 @@ router.post('/login', async (req: Request, res: Response): Promise<void> => {
     // 更新最后登录时间
     await db.updateLastLogin(user.id);
 
+    const token = createSession(user.id);
     res.json({
       success: true,
       user,
+      token,
       message: '登录成功'
     });
   } catch (error) {
@@ -235,16 +228,16 @@ router.get('/check-username/:username', async (req: Request, res: Response): Pro
  * 更改密码
  * POST /api/auth/change-password
  */
-router.post('/change-password', async (req: Request, res: Response): Promise<void> => {
+router.post('/change-password', requireAuth, async (req: Request, res: Response): Promise<void> => {
   try {
-    const { userId, currentPassword, newPassword, confirmPassword } = req.body as {
-      userId?: string;
+    const userId = req.userId!;
+    const { currentPassword, newPassword, confirmPassword } = req.body as {
       currentPassword?: string;
       newPassword?: string;
       confirmPassword?: string;
     };
 
-    if (!userId || !currentPassword || !newPassword) {
+    if (!currentPassword || !newPassword) {
       res.status(400).json({
         success: false,
         error: '缺少必要参数'

@@ -3,7 +3,6 @@
  * 处理对话创建、消息发送、历史记录等功能
  */
 import { Router, Request, Response } from 'express';
-import { jsonDatabase } from '../services/json-database.js';
 import { aiServiceManager } from '../services/ai-service-manager.js';
 import { AIProvider, ChatMessage } from '../services/types.js';
 import {
@@ -15,35 +14,10 @@ import {
   isMessageRole
 } from '../services/type-guards.js';
 import { configManager } from '../services/config-manager.js';
+import { ensureDatabaseInitialized } from '../services/database-init.js';
+import { sanitizeErrorMessage } from '../services/error-utils.js';
 
 const router = Router();
-
-/**
- * 净化错误消息，移除可能包含的敏感信息（如 API key、token）
- */
-function sanitizeErrorMessage(message: string): string {
-  // 替换常见的 API key 模式
-  return message
-    .replace(/sk-[a-zA-Z0-9_-]{20,}/g, 'sk-***')
-    .replace(/key[=:]\s*["']?[a-zA-Z0-9_-]{20,}["']?/gi, 'key=***')
-    .replace(/token[=:]\s*["']?[a-zA-Z0-9_-]{20,}["']?/gi, 'token=***')
-    .replace(/AIza[a-zA-Z0-9_-]{30,}/g, 'AIza***')
-    .replace(/Bearer\s+[a-zA-Z0-9_.-]{20,}/gi, 'Bearer ***');
-}
-
-// 初始化JSON数据库
-let dbInitialized = false;
-
-async function ensureDatabaseInitialized() {
-  if (!dbInitialized) {
-    await jsonDatabase.init();
-    dbInitialized = true;
-    console.log('JSON Database initialized successfully');
-  }
-  return jsonDatabase;
-}
-
-// Note: getDefaultProviderConfig is now handled by configManager
 
 /**
  * 获取用户的对话列表

@@ -26,6 +26,7 @@ const useAuthStore = create<AuthStore>()(
     (set, get) => ({
       // Initial state
       user: null,
+      token: null,
       isAuthenticated: false,
       isLoading: false,
 
@@ -35,7 +36,7 @@ const useAuthStore = create<AuthStore>()(
       },
 
       logout: () => {
-        set({ user: null, isAuthenticated: false, isLoading: false });
+        set({ user: null, token: null, isAuthenticated: false, isLoading: false });
         // 清除localStorage中的其他用户相关数据
         localStorage.removeItem('gemini_video_webui_user_id');
         localStorage.removeItem('selectedModel');
@@ -68,6 +69,7 @@ const useAuthStore = create<AuthStore>()(
           const data = await response.json();
           
           if (data.success) {
+            set({ token: data.token || null });
             get().login(data.user);
             return { success: true, message: data.message };
           } else {
@@ -94,6 +96,7 @@ const useAuthStore = create<AuthStore>()(
           const data = await response.json();
           
           if (data.success) {
+            set({ token: data.token || null });
             get().login(data.user);
             // 更新localStorage中的用户ID以保持兼容性
             localStorage.setItem('gemini_video_webui_user_id', data.user.id);
@@ -124,8 +127,8 @@ const useAuthStore = create<AuthStore>()(
       },
 
       changePassword: async (currentPassword: string, newPassword: string, confirmPassword?: string) => {
-        const user = get().user;
-        if (!user) {
+        const { user, token } = get();
+        if (!user || !token) {
           return { success: false, error: '用户未登录' };
         }
 
@@ -135,12 +138,12 @@ const useAuthStore = create<AuthStore>()(
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
+              'Authorization': `Bearer ${token}`,
             },
-            body: JSON.stringify({ 
-              userId: user.id, 
-              currentPassword, 
-              newPassword, 
-              confirmPassword 
+            body: JSON.stringify({
+              currentPassword,
+              newPassword,
+              confirmPassword
             }),
           });
 
@@ -206,9 +209,10 @@ const useAuthStore = create<AuthStore>()(
     }),
     {
       name: 'auth-storage',
-      // 只持久化用户信息，不持久化loading状态
+      // 只持久化用户信息和token，不持久化loading状态
       partialize: (state) => ({
         user: state.user,
+        token: state.token,
         isAuthenticated: state.isAuthenticated,
       }),
     }
