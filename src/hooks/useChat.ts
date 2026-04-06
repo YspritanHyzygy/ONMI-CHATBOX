@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { getUserId } from '@/lib/user';
+import { fetchWithAuth } from '@/lib/fetch';
 import {
   getValidatedModel,
   getValidatedConversations,
@@ -111,7 +112,7 @@ export function useChat() {
   const loadUserSettings = useCallback(async () => {
     try {
       const userId = getUserId();
-      const response = await fetch(`/api/providers/config?userId=${encodeURIComponent(userId)}`);
+      const response = await fetchWithAuth(`/api/providers/config?userId=${encodeURIComponent(userId)}`);
       if (response.ok) {
         const result = await response.json();
         if (result.success && result.data) {
@@ -129,7 +130,7 @@ export function useChat() {
   const loadConversations = useCallback(async () => {
     try {
       const userId = getUserId();
-      const response = await fetch(`/api/chat/conversations?userId=${userId}`);
+      const response = await fetchWithAuth(`/api/chat/conversations?userId=${userId}`);
       if (response.ok) {
         const data = await response.json();
         if (data.success && Array.isArray(data.conversations) && data.conversations.length > 0) {
@@ -149,7 +150,7 @@ export function useChat() {
 
   const loadConversationMessages = useCallback(async (conversationId: string) => {
     try {
-      const response = await fetch(`/api/chat/conversations/${conversationId}/messages`);
+      const response = await fetchWithAuth(`/api/chat/conversations/${conversationId}/messages`);
       if (response.ok) {
         const result = await response.json();
         if (result.success && result.data) {
@@ -252,7 +253,7 @@ export function useChat() {
       saveConversationsToStorage(newConversations);
       setCurrentConversation(conversation);
 
-      fetch('/api/chat/conversations', {
+      fetchWithAuth('/api/chat/conversations', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -320,7 +321,7 @@ export function useChat() {
       const url = new URL('/api/chat', window.location.origin);
       url.searchParams.set('stream', 'true');
 
-      const response = await fetch(url.toString(), {
+      const response = await fetchWithAuth(url.toString(), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -541,7 +542,7 @@ export function useChat() {
     try {
       const conversationIds = conversations.map(conv => conv.id);
       for (const id of conversationIds) {
-        await fetch(`/api/chat/conversations/${id}`, { method: 'DELETE' });
+        await fetchWithAuth(`/api/chat/conversations/${id}`, { method: 'DELETE' });
       }
       setConversations([]);
       setCurrentConversation(null);

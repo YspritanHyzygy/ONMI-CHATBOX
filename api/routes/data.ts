@@ -2,20 +2,9 @@
  * 用户数据导出/导入相关的API路由
  */
 import { Router, Request, Response } from 'express';
-import { jsonDatabase } from '../services/json-database.js';
+import { ensureDatabaseInitialized } from '../services/database-init.js';
 
 const router = Router();
-
-// 初始化JSON数据库
-let dbInitialized = false;
-
-async function ensureDatabaseInitialized() {
-  if (!dbInitialized) {
-    await jsonDatabase.init();
-    dbInitialized = true;
-  }
-  return jsonDatabase;
-}
 
 /**
  * 清除所有用户的动态获取模型数据

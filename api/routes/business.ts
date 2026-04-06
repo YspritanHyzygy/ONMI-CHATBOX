@@ -3,7 +3,7 @@
  * 为未来的商业化版本预留接口
  */
 import { Router, Request, Response } from 'express';
-import { jsonDatabase } from '../services/json-database.js';
+import { ensureDatabaseInitialized } from '../services/database-init.js';
 
 const router = Router();
 
@@ -42,16 +42,6 @@ const BUSINESS_CONFIG = {
   }
 };
 
-// 初始化数据库
-let dbInitialized = false;
-
-async function ensureDatabaseInitialized() {
-  if (!dbInitialized) {
-    await jsonDatabase.init();
-    dbInitialized = true;
-  }
-  return jsonDatabase;
-}
 
 /**
  * 获取用户订阅信息

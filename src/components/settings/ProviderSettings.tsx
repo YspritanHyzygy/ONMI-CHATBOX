@@ -13,6 +13,7 @@ import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 import { convertModelIdToDisplayName } from '@/lib/model-display-names';
 import { getUserId } from '@/lib/user';
+import { fetchWithAuth } from '@/lib/fetch';
 import type { AIProvider, ProviderConfig } from './types';
 
 interface ProviderSettingsProps {
@@ -161,7 +162,7 @@ export default function ProviderSettings({
                           }
                           setTestingProvider(`${provider.id}-responses`);
                           try {
-                            const response = await fetch('/api/chat', {
+                            const response = await fetchWithAuth('/api/chat', {
                               method: 'POST',
                               headers: { 'Content-Type': 'application/json' },
                               body: JSON.stringify({

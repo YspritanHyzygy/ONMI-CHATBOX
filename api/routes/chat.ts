@@ -3,7 +3,6 @@
  * 处理对话创建、消息发送、历史记录等功能
  */
 import { Router, Request, Response } from 'express';
-import { jsonDatabase } from '../services/json-database.js';
 import { aiServiceManager } from '../services/ai-service-manager.js';
 import { AIProvider, ChatMessage } from '../services/types.js';
 import {
@@ -15,22 +14,10 @@ import {
   isMessageRole
 } from '../services/type-guards.js';
 import { configManager } from '../services/config-manager.js';
+import { ensureDatabaseInitialized } from '../services/database-init.js';
+import { sanitizeErrorMessage } from '../services/error-utils.js';
 
 const router = Router();
-
-// 初始化JSON数据库
-let dbInitialized = false;
-
-async function ensureDatabaseInitialized() {
-  if (!dbInitialized) {
-    await jsonDatabase.init();
-    dbInitialized = true;
-    console.log('JSON Database initialized successfully');
-  }
-  return jsonDatabase;
-}
-
-// Note: getDefaultProviderConfig is now handled by configManager
 
 /**
  * 获取用户的对话列表
@@ -735,21 +722,29 @@ router.post('/', async (req: Request, res: Response): Promise<void> => {
         } catch (streamError: any) {
           console.error('流式响应错误:', streamError);
 
+          // 净化错误消息，避免泄露敏感信息（如 API key）
+          const sanitizedError = sanitizeErrorMessage(streamError.message);
+
           // 发送错误信息到前端
           res.write(`data: ${JSON.stringify({
-            error: streamError.message,
+            error: sanitizedError,
             content: '',
             done: true
           })}\n\n`);
 
           // 保存错误消息到数据库
-          await db.from('messages').insert({
-            conversation_id: targetConversationId,
-            role: 'assistant',
-            content: `抱歉，AI服务暂时不可用：${streamError.message}`,
-            provider: actualProvider,
-            model
-          });
+          try {
+            await db.from('messages').insert({
+              conversation_id: targetConversationId,
+              role: 'assistant',
+              content: `抱歉，AI服务暂时不可用：${sanitizedError}`,
+              provider: actualProvider,
+              model
+            });
+          } catch (dbError) {
+            const dbErrorMsg = dbError instanceof Error ? dbError.message : '未知数据库错误';
+            console.error('保存流式错误消息失败:', dbErrorMsg);
+          }
 
           res.end();
           return;
@@ -841,6 +836,7 @@ router.post('/', async (req: Request, res: Response): Promise<void> => {
     } catch (aiError: unknown) {
       // Type-safe error handling
       const errorMessage = aiError instanceof Error ? aiError.message : '未知错误';
+      const sanitizedMsg = sanitizeErrorMessage(errorMessage);
       console.error('AI服务调用错误:', errorMessage);
 
       // 保存错误消息
@@ -848,7 +844,7 @@ router.post('/', async (req: Request, res: Response): Promise<void> => {
         await db.from('messages').insert({
           conversation_id: targetConversationId,
           role: 'assistant',
-          content: `抱歉，AI服务暂时不可用：${errorMessage}`,
+          content: `抱歉，AI服务暂时不可用：${sanitizedMsg}`,
           provider: actualProvider,
           model
         });
@@ -860,7 +856,7 @@ router.post('/', async (req: Request, res: Response): Promise<void> => {
       if (!res.headersSent) {
         res.status(500).json({
           success: false,
-          error: `AI服务调用失败：${errorMessage}`
+          error: `AI服务调用失败：${sanitizedMsg}`
         });
       }
     }

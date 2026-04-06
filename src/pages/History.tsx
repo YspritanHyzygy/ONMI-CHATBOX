@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { Search, MessageSquare, Trash2, Calendar, ArrowLeft, ExternalLink } from 'lucide-react';
 import { toast } from 'sonner';
 import { useTranslation } from 'react-i18next';
+import { fetchWithAuth } from '../lib/fetch';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent } from '@/components/ui/card';
@@ -46,7 +47,7 @@ export default function History() {
   const loadConversations = async () => {
     try {
       setIsLoading(true);
-      const response = await fetch('/api/conversations');
+      const response = await fetchWithAuth('/api/conversations');
       if (response.ok) {
         const data = await response.json();
         setConversations(data.conversations || []);
@@ -74,7 +75,7 @@ export default function History() {
   const handleDeleteSelected = async () => {
     if (selectedConversations.length === 0) return;
     try {
-      const response = await fetch('/api/conversations/batch-delete', {
+      const response = await fetchWithAuth('/api/conversations/batch-delete', {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ conversationIds: selectedConversations }),
@@ -93,7 +94,7 @@ export default function History() {
 
   const handleDeleteSingle = async (conversationId: string) => {
     try {
-      const response = await fetch(`/api/conversations/${conversationId}`, { method: 'DELETE' });
+      const response = await fetchWithAuth(`/api/conversations/${conversationId}`, { method: 'DELETE' });
       if (response.ok) {
         setConversations(prev => prev.filter(conv => conv.id !== conversationId));
         setSelectedConversations(prev => prev.filter(id => id !== conversationId));

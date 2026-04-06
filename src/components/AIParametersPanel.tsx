@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { Sliders, RotateCcw, AlertTriangle } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { getValidatedAIParameters, setStorageItem } from '../lib/storage';
+import { fetchWithAuth } from '../lib/fetch';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
@@ -146,7 +147,7 @@ export default function AIParametersPanel({ onParametersChange, className = '', 
 
   const loadModelLimits = useCallback(async (provider: AIProviderType, modelId?: string) => {
     try {
-      const response = await fetch(`/api/model-limits/${provider}${modelId ? `/${modelId}` : ''}`);
+      const response = await fetchWithAuth(`/api/model-limits/${provider}${modelId ? `/${modelId}` : ''}`);
       if (response.ok) {
         const entry = await response.json();
         const limits: ProviderLimits = {

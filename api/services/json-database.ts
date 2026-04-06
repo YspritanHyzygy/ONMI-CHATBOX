@@ -118,9 +118,10 @@ class LockManager {
     try {
       // 执行操作
       const result = await operation();
-      lockResolve();
       return result;
     } finally {
+      // 确保锁的 Promise 被 resolve，避免等待者永远挂起
+      lockResolve();
       // 释放锁
       this.releaseLock(key);
     }

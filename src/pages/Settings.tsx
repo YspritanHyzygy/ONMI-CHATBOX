@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { getUserId } from '../lib/user';
 import { setStorageItem, getStorageItem } from '../lib/storage';
+import { fetchWithAuth } from '../lib/fetch';
 import SettingsLayout from '../components/settings/SettingsLayout';
 import ProviderSettings from '../components/settings/ProviderSettings';
 import UserManagement from '../components/settings/UserManagement';
@@ -144,7 +145,7 @@ export default function Settings() {
     try {
       type KnownProviderId = 'openai' | 'claude' | 'gemini' | 'xai' | 'ollama';
       interface ApiProviderData { id: KnownProviderId; name: string; description?: string; }
-      const response = await fetch('/api/providers/supported');
+      const response = await fetchWithAuth('/api/providers/supported');
       if (response.ok) {
         const result = await response.json();
         if (result.success && result.data) {
@@ -201,7 +202,7 @@ export default function Settings() {
   const loadConfigs = async () => {
     try {
       const userId = getUserId();
-      const response = await fetch(`/api/providers/config?userId=${encodeURIComponent(userId)}`);
+      const response = await fetchWithAuth(`/api/providers/config?userId=${encodeURIComponent(userId)}`);
       if (response.ok) {
         const result = await response.json();
         if (result.success && result.data) {
@@ -320,7 +321,7 @@ export default function Settings() {
                                (providerId !== 'ollama' && (!config.config.api_key || config.config.api_key.trim() === ''));
       if (shouldClearConfig) {
         const userId = getUserId();
-        const response = await fetch(`/api/providers/config?userId=${encodeURIComponent(userId)}&providerName=${encodeURIComponent(providerId)}`, { method: 'DELETE', headers: { 'Content-Type': 'application/json' } });
+        const response = await fetchWithAuth(`/api/providers/config?userId=${encodeURIComponent(userId)}&providerName=${encodeURIComponent(providerId)}`, { method: 'DELETE', headers: { 'Content-Type': 'application/json' } });
         if (response.ok) {
           setConfigs(prev => prev.filter(c => c.provider !== providerId));
           setModelFetchResults(prev => { const updated = { ...prev }; delete updated[providerId]; return updated; });
@@ -335,7 +336,7 @@ export default function Settings() {
       if (providerId !== 'ollama' && !config.config.api_key) throw new Error('API Key 是必填项');
       if (providerId === 'ollama' && !config.config.base_url) throw new Error('Base URL 是必填项');
       const userId = getUserId();
-      const response = await fetch('/api/providers/config', {
+      const response = await fetchWithAuth('/api/providers/config', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ userId, providerName: providerId, apiKey: config.config.api_key, baseUrl: config.config.base_url, availableModels: config.models || modelFetchResults[providerId]?.models || [], defaultModel: config.model, extraConfig: config.config }),
@@ -379,7 +380,7 @@ export default function Settings() {
         }
       }
       if (providerId !== 'ollama' && !config.config.api_key) { setTestResults(prev => ({ ...prev, [providerId]: { success: false, message: 'API Key 是必填项' } })); return; }
-      const response = await fetch('/api/providers/test', {
+      const response = await fetchWithAuth('/api/providers/test', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -465,7 +466,7 @@ export default function Settings() {
         setModelFetchResults(prev => ({ ...prev, [providerId]: { success: false, models: [], researchModels: [], message: providerId === 'ollama' ? '请先配置服务器地址' : '请先配置API密钥' } }));
         return;
       }
-      const response = await fetch('/api/providers/models', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ providerName: providerId, apiKey: config.config.api_key, baseUrl: config.config.base_url }) });
+      const response = await fetchWithAuth('/api/providers/models', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ providerName: providerId, apiKey: config.config.api_key, baseUrl: config.config.base_url }) });
       const result = await response.json();
       if (result.success) {
         const allModels = result.data.models || [];
@@ -489,7 +490,7 @@ export default function Settings() {
             const updatedConfig = getProviderConfig(providerId);
             if (updatedConfig) {
               const userId = getUserId();
-              const resp = await fetch('/api/providers/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId, providerName: providerId, apiKey: updatedConfig.config.api_key, baseUrl: updatedConfig.config.base_url, availableModels: allModelsForSaving, defaultModel }) });
+              const resp = await fetchWithAuth('/api/providers/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId, providerName: providerId, apiKey: updatedConfig.config.api_key, baseUrl: updatedConfig.config.base_url, availableModels: allModelsForSaving, defaultModel }) });
               if (resp.ok) {
                 window.dispatchEvent(new Event('modelsUpdated'));
                 await loadConfigs();
@@ -519,7 +520,7 @@ export default function Settings() {
     try {
       const userId = getUserId();
       if (!userId) { setShowResetLoading(false); setResetStatus({ status: 'error', message: t('auth.pleaseLogin') }); return; }
-      const response = await fetch('/api/data/clear-models', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId }) });
+      const response = await fetchWithAuth('/api/data/clear-models', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId }) });
       if (response.ok) {
         const result = await response.json();
         if (result.success) {

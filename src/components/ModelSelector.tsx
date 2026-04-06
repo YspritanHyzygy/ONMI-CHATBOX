@@ -3,6 +3,7 @@ import { ChevronsUpDown, Check } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { getUserId } from '../lib/user';
 import { getValidatedModel, setStorageItem } from '../lib/storage';
+import { fetchWithAuth } from '../lib/fetch';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
@@ -51,7 +52,7 @@ export default function ModelSelector({ selectedModel, onModelChange, className 
 
     try {
       const userId = getUserId();
-      const response = await fetch(`/api/providers?userId=${encodeURIComponent(userId)}`);
+      const response = await fetchWithAuth(`/api/providers?userId=${encodeURIComponent(userId)}`);
       if (!response.ok) {
         throw new Error(t('modelSelector.fetchError'));
       }

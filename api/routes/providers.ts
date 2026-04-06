@@ -3,24 +3,11 @@
  * 处理用户的AI服务配置、测试连接等功能
  */
 import { Router, type Request, type Response } from 'express';
-import { jsonDatabase } from '../services/json-database.js';
 import { aiServiceManager } from '../services/ai-service-manager.js';
 import { AIProvider } from '../services/types.js';
-
+import { ensureDatabaseInitialized } from '../services/database-init.js';
 
 const router = Router();
-
-// 初始化JSON数据库
-let dbInitialized = false;
-
-async function ensureDatabaseInitialized() {
-  if (!dbInitialized) {
-    await jsonDatabase.init();
-    dbInitialized = true;
-    console.log('JSON Database initialized successfully');
-  }
-  return jsonDatabase;
-}
 
 // 支持的AI服务提供商列表 - 使用系统预设的默认模型列表
 const SUPPORTED_PROVIDERS = [

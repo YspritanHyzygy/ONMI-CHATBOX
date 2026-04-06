@@ -23,6 +23,7 @@ import authRoutes from './routes/auth.js';
 import dataRoutes from './routes/data.js';
 import businessRoutes from './routes/business.js';
 import modelLimitsRoutes from './routes/model-limits.js';
+import { requireAuth } from './middleware/auth.js';
 
 
 const app: express.Application = express();
@@ -33,13 +34,15 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 /**
  * API Routes
+ * - /api/auth 不需要认证（登录、注册等）
+ * - 其他路由需要认证
  */
-app.use('/api/chat', chatRoutes);
-app.use('/api/providers', providersRoutes);
 app.use('/api/auth', authRoutes);
-app.use('/api/data', dataRoutes);
-app.use('/api/business', businessRoutes);
-app.use('/api/model-limits', modelLimitsRoutes);
+app.use('/api/chat', requireAuth, chatRoutes);
+app.use('/api/providers', requireAuth, providersRoutes);
+app.use('/api/data', requireAuth, dataRoutes);
+app.use('/api/business', requireAuth, businessRoutes);
+app.use('/api/model-limits', requireAuth, modelLimitsRoutes);
 
 /**
  * health
