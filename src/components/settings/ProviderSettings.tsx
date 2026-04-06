@@ -386,7 +386,10 @@ function UnifiedStatusArea({
           <AlertCircle className="w-4 h-4 text-destructive mt-0.5 shrink-0" />
         )}
         <div className="flex-1 min-w-0">
-          <p className={cn('text-sm', status.success ? 'text-success-foreground' : 'text-destructive')}>
+          {/* 用 text-success（深绿）在 bg-success/10（浅绿）上读；
+              text-success-foreground 是用来放在实心 bg-success 上的几乎白色，
+              放在 /10 背景上会和背景同色看不清 */}
+          <p className={cn('text-sm', status.success ? 'text-success' : 'text-destructive')}>
             {status.message}
           </p>
           {status.success && status.models && status.models.length > 0 && (

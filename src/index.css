@@ -27,7 +27,8 @@
 
     --warning: 38 92% 50%;
     --warning-foreground: 38 20% 20%;
-    --success: 142 76% 36%;
+    /* 从 36% 降到 26%，让 text-success 在 bg-success/10 浅底上对比度达到 WCAG AA（5.21:1） */
+    --success: 142 76% 26%;
     --success-foreground: 142 76% 95%;
 
     --sidebar-background: 0 0% 98%;
