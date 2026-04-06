@@ -2,17 +2,17 @@ import React from 'react';
 import MarkdownRenderer from '../MarkdownRenderer';
 
 interface ThinkingContentProps {
-    content: string;
-    className?: string;
+  content: string;
+  className?: string;
 }
 
 export const ThinkingContent: React.FC<ThinkingContentProps> = ({
-    content,
-    className = ''
+  content,
+  className = ''
 }) => {
-    return (
-        <div className={`p-4 bg-gray-50 text-gray-600 text-sm border-b border-gray-200 overflow-x-auto ${className}`}>
-            <MarkdownRenderer content={content} className="prose-sm max-w-none" />
-        </div>
-    );
+  return (
+    <div className={`p-4 bg-muted/50 text-muted-foreground text-sm border-b border-border overflow-x-auto ${className}`}>
+      <MarkdownRenderer content={content} className="prose-sm max-w-none" />
+    </div>
+  );
 };

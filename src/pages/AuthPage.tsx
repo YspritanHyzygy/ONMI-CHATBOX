@@ -1,13 +1,29 @@
-/**
- * 用户认证页面 - 登录和注册
- */
 import { useState, useCallback } from 'react';
 import { Navigate } from 'react-router-dom';
-import { User, Loader2, Eye, EyeOff } from 'lucide-react';
-import useAuthStore from '../store/authStore';
-import PasswordStrength from '../components/PasswordStrength';
+import { User, Loader2, Eye, EyeOff, Info } from 'lucide-react';
+import { toast } from 'sonner';
+import useAuthStore from '@/store/authStore';
+import PasswordStrength from '@/components/PasswordStrength';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
+import { Avatar, AvatarFallback } from '@/components/ui/avatar';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from '@/components/ui/alert-dialog';
+import { useTranslation } from 'react-i18next';
 
 export default function AuthPage() {
+  const { t } = useTranslation();
   const [isLogin, setIsLogin] = useState(true);
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -24,265 +40,224 @@ export default function AuthPage() {
 
   const { isAuthenticated, isLoading, registerUser, loginUser } = useAuthStore();
 
-  // 优化密码验证回调，防止无限渲染
   const handlePasswordValidation = useCallback((isValid: boolean, errors: string[], strength: 'weak' | 'medium' | 'strong') => {
     setPasswordValidation({ isValid, errors, strength });
   }, []);
 
-  // 清除登录和账号信息
   const handleClearLoginData = () => {
-    if (confirm('确定要清除所有登录和账号信息吗？这将删除所有本地存储的用户数据，包括登录状态、对话历史等。')) {
-      // 清除所有localStorage数据
-      localStorage.clear();
-      
-      // 清除表单数据
-      setUsername('');
-      setPassword('');
-      setConfirmPassword('');
-      setDisplayName('');
-      setEmail('');
-      setError('');
-      setShowPassword(false);
-      setPasswordValidation(null);
-      
-      alert('所有登录和账号信息已清除！');
-      
-      // 刷新页面以确保状态完全重置
-      window.location.reload();
-    }
+    localStorage.clear();
+    setUsername('');
+    setPassword('');
+    setConfirmPassword('');
+    setDisplayName('');
+    setEmail('');
+    setError('');
+    setShowPassword(false);
+    setPasswordValidation(null);
+    toast.success(t('auth.dataCleared', { defaultValue: 'All login data cleared' }));
+    window.location.reload();
   };
 
-  // 如果已登录，重定向到聊天页面
   if (isAuthenticated) {
     return <Navigate to="/" replace />;
   }
 
-  // 处理表单提交
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
 
-    if (!username.trim()) {
-      setError('请输入用户名');
-      return;
-    }
+    if (!username.trim()) { setError(t('auth.usernameRequired', { defaultValue: '请输入用户名' })); return; }
+    if (!password.trim()) { setError(t('auth.passwordRequired', { defaultValue: '请输入密码' })); return; }
 
-    if (!password.trim()) {
-      setError('请输入密码');
-      return;
-    }
-
-    // 注册时的额外验证
     if (!isLogin) {
-      if (password.length < 6) {
-        setError('密码长度不能少于6个字符');
-        return;
-      }
-      
-      // 使用密码强度验证结果
-      if (passwordValidation && !passwordValidation.isValid) {
-        setError(passwordValidation.errors[0] || '密码不符合要求');
-        return;
-      }
-      
-      if (confirmPassword && password !== confirmPassword) {
-        setError('两次输入的密码不一致');
-        return;
-      }
+      if (password.length < 6) { setError(t('auth.passwordTooShort', { defaultValue: '密码长度不能少于6个字符' })); return; }
+      if (passwordValidation && !passwordValidation.isValid) { setError(passwordValidation.errors[0] || t('auth.passwordInvalid', { defaultValue: '密码不符合要求' })); return; }
+      if (confirmPassword && password !== confirmPassword) { setError(t('auth.passwordMismatch', { defaultValue: '两次输入的密码不一致' })); return; }
     }
 
     try {
       if (isLogin) {
         const result = await loginUser(username, password);
-        if (!result.success) {
-          setError(result.error || '登录失败');
-        }
+        if (!result.success) setError(result.error || t('auth.loginFailed', { defaultValue: '登录失败' }));
       } else {
         const result = await registerUser(username, password, confirmPassword, displayName, email);
-        if (!result.success) {
-          setError(result.error || '注册失败');
-        }
+        if (!result.success) setError(result.error || t('auth.registerFailed', { defaultValue: '注册失败' }));
       }
-    } catch (error) {
-      setError('操作失败，请重试');
+    } catch {
+      setError(t('auth.operationFailed', { defaultValue: '操作失败，请重试' }));
     }
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
-      <div className="bg-white rounded-lg shadow-md w-full max-w-md p-6">
-        {/* Header */}
-        <div className="text-center mb-6">
-          <div className="w-12 h-12 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-3">
-            <User className="w-6 h-6 text-blue-600" />
-          </div>
-          <h1 className="text-xl font-bold text-gray-900">
-            {isLogin ? '登录账户' : '创建账户'}
-          </h1>
-        </div>
+    <div className="min-h-screen bg-background flex items-center justify-center p-4">
+      <Card className="w-full max-w-md">
+        <CardHeader className="text-center space-y-2">
+          <Avatar className="h-12 w-12 mx-auto">
+            <AvatarFallback className="bg-primary text-primary-foreground">
+              <User className="h-6 w-6" />
+            </AvatarFallback>
+          </Avatar>
+          <CardTitle className="text-xl">
+            {isLogin ? t('auth.login', { defaultValue: '登录账户' }) : t('auth.register', { defaultValue: '创建账户' })}
+          </CardTitle>
+          <CardDescription>
+            {isLogin
+              ? t('auth.loginDescription', { defaultValue: '登录以继续使用' })
+              : t('auth.registerDescription', { defaultValue: '创建新账户开始使用' })
+            }
+          </CardDescription>
+        </CardHeader>
 
-        {/* Error Message */}
-        {error && (
-          <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded text-red-700 text-sm">
-            {error}
-          </div>
-        )}
-
-        {/* Form */}
-        <form onSubmit={handleSubmit} className="space-y-4">
-          {/* Username */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              用户名 *
-            </label>
-            <input
-              type="text"
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-              placeholder="输入用户名"
-              disabled={isLoading}
-            />
-          </div>
-
-          {/* Password */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              密码 *
-            </label>
-            <div className="relative">
-              <input
-                type={showPassword ? "text" : "password"}
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500 pr-10"
-                placeholder={isLogin ? "输入密码" : "设置密码（至少6位）"}
-                disabled={isLoading}
-              />
-              <button
-                type="button"
-                onClick={() => setShowPassword(!showPassword)}
-                className="absolute right-2 top-1/2 transform -translate-y-1/2 text-gray-500 hover:text-gray-700"
-                disabled={isLoading}
-              >
-                {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-              </button>
-            </div>
-            
-            {/* 密码强度指示器（仅注册时显示） */}
-            {!isLogin && password && (
-              <PasswordStrength 
-                password={password} 
-                onValidation={handlePasswordValidation}
-              />
-            )}
-          </div>
-
-          {/* Confirm Password (only for registration) */}
-          {!isLogin && (
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                确认密码 *
-              </label>
-              <input
-                type={showPassword ? "text" : "password"}
-                value={confirmPassword}
-                onChange={(e) => setConfirmPassword(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                placeholder="再次输入密码"
-                disabled={isLoading}
-              />
+        <CardContent>
+          {error && (
+            <div className="mb-4 p-3 bg-destructive/10 border border-destructive/20 rounded-lg text-destructive text-sm">
+              {error}
             </div>
           )}
 
-          {/* Display Name (only for registration) */}
-          {!isLogin && (
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                显示名称
-              </label>
-              <input
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="username">{t('auth.username', { defaultValue: '用户名' })} *</Label>
+              <Input
+                id="username"
                 type="text"
-                value={displayName}
-                onChange={(e) => setDisplayName(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                placeholder="输入显示名称（可选）"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                placeholder={t('auth.usernamePlaceholder', { defaultValue: '输入用户名' })}
                 disabled={isLoading}
               />
             </div>
-          )}
 
-          {/* Email (only for registration) */}
-          {!isLogin && (
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                邮箱地址
-              </label>
-              <input
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                placeholder="输入邮箱地址（可选）"
-                disabled={isLoading}
-              />
-            </div>
-          )}
-
-          {/* Submit Button */}
-          <button
-            type="submit"
-            disabled={isLoading}
-            className="w-full bg-blue-600 text-white py-2 px-4 rounded hover:bg-blue-700 focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {isLoading ? (
-              <div className="flex items-center justify-center gap-2">
-                <Loader2 className="w-4 h-4 animate-spin" />
-                <span>{isLogin ? '登录中...' : '注册中...'}</span>
+            <div className="space-y-2">
+              <Label htmlFor="password">{t('auth.password', { defaultValue: '密码' })} *</Label>
+              <div className="relative">
+                <Input
+                  id="password"
+                  type={showPassword ? "text" : "password"}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder={isLogin ? t('auth.passwordPlaceholder', { defaultValue: '输入密码' }) : t('auth.setPasswordPlaceholder', { defaultValue: '设置密码（至少6位）' })}
+                  disabled={isLoading}
+                  className="pr-10"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                  disabled={isLoading}
+                >
+                  {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
               </div>
-            ) : (
-              isLogin ? '登录' : '注册'
+              {!isLogin && password && (
+                <PasswordStrength password={password} onValidation={handlePasswordValidation} />
+              )}
+            </div>
+
+            {!isLogin && (
+              <>
+                <div className="space-y-2">
+                  <Label htmlFor="confirmPassword">{t('auth.confirmPassword', { defaultValue: '确认密码' })} *</Label>
+                  <Input
+                    id="confirmPassword"
+                    type={showPassword ? "text" : "password"}
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    placeholder={t('auth.confirmPasswordPlaceholder', { defaultValue: '再次输入密码' })}
+                    disabled={isLoading}
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="displayName">{t('auth.displayName', { defaultValue: '显示名称' })}</Label>
+                  <Input
+                    id="displayName"
+                    type="text"
+                    value={displayName}
+                    onChange={(e) => setDisplayName(e.target.value)}
+                    placeholder={t('auth.displayNamePlaceholder', { defaultValue: '输入显示名称（可选）' })}
+                    disabled={isLoading}
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="email">{t('auth.email', { defaultValue: '邮箱地址' })}</Label>
+                  <Input
+                    id="email"
+                    type="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder={t('auth.emailPlaceholder', { defaultValue: '输入邮箱地址（可选）' })}
+                    disabled={isLoading}
+                  />
+                </div>
+              </>
             )}
-          </button>
-        </form>
 
-        {/* Toggle Mode */}
-        <div className="mt-4 text-center">
-          <button
-            type="button"
-            onClick={() => {
-              setIsLogin(!isLogin);
-              setError('');
-              setPassword('');
-              setConfirmPassword('');
-              setDisplayName('');
-              setEmail('');
-              setShowPassword(false);
-            }}
-            className="text-blue-600 hover:text-blue-500 text-sm"
-            disabled={isLoading}
-          >
-            {isLogin ? '还没有账户？立即注册' : '已有账户？立即登录'}
-          </button>
-        </div>
+            <Button type="submit" disabled={isLoading} className="w-full">
+              {isLoading ? (
+                <span className="flex items-center gap-2">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  {isLogin ? t('auth.loggingIn', { defaultValue: '登录中...' }) : t('auth.registering', { defaultValue: '注册中...' })}
+                </span>
+              ) : (
+                isLogin ? t('auth.loginButton', { defaultValue: '登录' }) : t('auth.registerButton', { defaultValue: '注册' })
+              )}
+            </Button>
+          </form>
 
-        {/* Clear Login Data */}
-        <div className="mt-4 text-center">
-          <button
-            type="button"
-            onClick={handleClearLoginData}
-            className="text-red-600 hover:text-red-500 text-xs underline"
-            disabled={isLoading}
-          >
-            清除登录和账号信息
-          </button>
-        </div>
+          <div className="mt-4 text-center">
+            <button
+              type="button"
+              onClick={() => {
+                setIsLogin(!isLogin);
+                setError('');
+                setPassword('');
+                setConfirmPassword('');
+                setDisplayName('');
+                setEmail('');
+                setShowPassword(false);
+              }}
+              className="text-sm text-primary hover:text-primary/80 transition-colors"
+              disabled={isLoading}
+            >
+              {isLogin
+                ? t('auth.switchToRegister', { defaultValue: '还没有账户？立即注册' })
+                : t('auth.switchToLogin', { defaultValue: '已有账户？立即登录' })
+              }
+            </button>
+          </div>
 
-        {/* Info */}
-        <div className="mt-4 p-3 bg-blue-50 border border-blue-200 rounded text-sm text-blue-700">
-          💡 提示：这是一个本地化应用，你的数据存储在本地，安全可靠。
-        </div>
-      </div>
+          <div className="mt-3 text-center">
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <button type="button" className="text-xs text-destructive hover:text-destructive/80 underline" disabled={isLoading}>
+                  {t('auth.clearData', { defaultValue: '清除登录和账号信息' })}
+                </button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>{t('auth.clearDataTitle', { defaultValue: '清除所有数据？' })}</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    {t('auth.clearDataDescription', { defaultValue: '这将删除所有本地存储的用户数据，包括登录状态、对话历史等。此操作不可撤销。' })}
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>{t('common.cancel', { defaultValue: 'Cancel' })}</AlertDialogCancel>
+                  <AlertDialogAction onClick={handleClearLoginData} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+                    {t('common.confirm', { defaultValue: 'Confirm' })}
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+          </div>
+
+          <div className="mt-4 flex items-start gap-2 p-3 rounded-lg bg-muted text-sm text-muted-foreground">
+            <Info className="h-4 w-4 mt-0.5 shrink-0" />
+            <span>{t('auth.localStorageInfo', { defaultValue: '这是一个本地化应用，你的数据存储在本地，安全可靠。' })}</span>
+          </div>
+        </CardContent>
+      </Card>
     </div>
   );
 }

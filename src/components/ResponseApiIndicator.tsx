@@ -1,5 +1,6 @@
 import { Zap, Radio } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { Badge } from '@/components/ui/badge';
 
 interface ResponseApiIndicatorProps {
   isActive: boolean;
@@ -7,37 +8,32 @@ interface ResponseApiIndicatorProps {
   className?: string;
 }
 
-export default function ResponseApiIndicator({ 
-  isActive, 
+export default function ResponseApiIndicator({
+  isActive,
   isProcessing = false,
-  className = '' 
+  className = ''
 }: ResponseApiIndicatorProps) {
   const { t } = useTranslation();
 
-  if (!isActive) {
-    return null;
-  }
+  if (!isActive) return null;
 
   return (
-    <div 
-      className={`flex items-center space-x-2 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
-        isProcessing 
-          ? 'bg-blue-100 text-blue-700 border border-blue-300' 
-          : 'bg-purple-100 text-purple-700 border border-purple-300'
-      } ${className}`}
+    <Badge
+      variant="secondary"
+      className={`gap-1 text-[10px] ${className}`}
       title={t('chat.responsesApiTooltip')}
     >
       {isProcessing ? (
         <>
-          <Radio className="w-3.5 h-3.5 animate-pulse" />
-          <span>{t('chat.responsesApiProcessing')}</span>
+          <Radio className="h-3 w-3 animate-pulse" />
+          {t('chat.responsesApiProcessing')}
         </>
       ) : (
         <>
-          <Zap className="w-3.5 h-3.5" />
-          <span>{t('chat.responsesApiActive')}</span>
+          <Zap className="h-3 w-3" />
+          {t('chat.responsesApiActive')}
         </>
       )}
-    </div>
+    </Badge>
   );
 }
