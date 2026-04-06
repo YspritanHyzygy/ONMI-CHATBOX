@@ -1,9 +1,25 @@
 import { useState, useEffect } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { Search, MessageSquare, Trash2, Calendar, ArrowLeft, ExternalLink } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import { toast } from 'sonner';
 import { useTranslation } from 'react-i18next';
 import { fetchWithAuth } from '../lib/fetch';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Card, CardContent } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { Skeleton } from '@/components/ui/skeleton';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from '@/components/ui/alert-dialog';
 
 interface Conversation {
   id: string;
@@ -36,47 +52,10 @@ export default function History() {
         const data = await response.json();
         setConversations(data.conversations || []);
       } else {
-        console.error('获取对话历史失败:', response.statusText);
-        // 使用模拟数据作为后备
-        const mockConversations: Conversation[] = [
-          {
-            id: '1',
-            title: '关于React的问题',
-            preview: '请解释一下React的useState钩子是如何工作的？',
-            created_at: '2024-01-15T10:30:00Z',
-            updated_at: '2024-01-15T10:45:00Z',
-            message_count: 8,
-            provider_used: 'openai',
-            model_used: 'gpt-3.5-turbo'
-          },
-          {
-            id: '2',
-            title: 'Python编程帮助',
-            preview: '如何在Python中处理异常？',
-            created_at: '2024-01-14T15:20:00Z',
-            updated_at: '2024-01-14T15:35:00Z',
-            message_count: 12,
-            provider_used: 'claude',
-            model_used: 'claude-3-sonnet'
-          },
-          {
-            id: '3',
-            title: '数据库设计讨论',
-            preview: '设计一个电商系统的数据库结构',
-            created_at: '2024-01-13T09:15:00Z',
-            updated_at: '2024-01-13T10:00:00Z',
-            message_count: 15,
-            provider_used: 'gemini',
-            model_used: 'gemini-pro'
-          }
-        ];
-        setConversations(mockConversations);
+        setConversations([]);
       }
-    } catch (error) {
-      console.error('加载对话历史失败:', error);
-      // 使用模拟数据作为后备
-      const mockConversations: Conversation[] = [];
-      setConversations(mockConversations);
+    } catch {
+      setConversations([]);
     } finally {
       setIsLoading(false);
     }
@@ -88,66 +67,44 @@ export default function History() {
   );
 
   const handleSelectConversation = (id: string) => {
-    setSelectedConversations(prev => 
-      prev.includes(id) 
-        ? prev.filter(convId => convId !== id)
-        : [...prev, id]
+    setSelectedConversations(prev =>
+      prev.includes(id) ? prev.filter(convId => convId !== id) : [...prev, id]
     );
   };
 
   const handleDeleteSelected = async () => {
     if (selectedConversations.length === 0) return;
-    
-    if (confirm(`确定要删除选中的 ${selectedConversations.length} 个对话吗？`)) {
-      try {
-        const response = await fetchWithAuth('/api/conversations/batch-delete', {
-          method: 'DELETE',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ conversationIds: selectedConversations }),
-        });
-        
-        if (response.ok) {
-          setConversations(prev => 
-            prev.filter(conv => !selectedConversations.includes(conv.id))
-          );
-          setSelectedConversations([]);
-        } else {
-          console.error('删除对话失败:', response.statusText);
-          alert('删除失败，请稍后重试');
-        }
-      } catch (error) {
-        console.error('删除对话失败:', error);
-        alert('删除失败，请稍后重试');
+    try {
+      const response = await fetchWithAuth('/api/conversations/batch-delete', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ conversationIds: selectedConversations }),
+      });
+      if (response.ok) {
+        setConversations(prev => prev.filter(conv => !selectedConversations.includes(conv.id)));
+        setSelectedConversations([]);
+        toast.success(t('history.deleteSuccess', { defaultValue: 'Conversations deleted' }));
+      } else {
+        toast.error(t('history.deleteFailed', { defaultValue: 'Delete failed' }));
       }
+    } catch {
+      toast.error(t('history.deleteFailed', { defaultValue: 'Delete failed' }));
     }
   };
 
   const handleDeleteSingle = async (conversationId: string) => {
-    if (confirm('确定要删除这个对话吗？')) {
-      try {
-        const response = await fetchWithAuth(`/api/conversations/${conversationId}`, {
-          method: 'DELETE',
-        });
-        
-        if (response.ok) {
-          setConversations(prev => prev.filter(conv => conv.id !== conversationId));
-          setSelectedConversations(prev => prev.filter(id => id !== conversationId));
-        } else {
-          console.error('删除对话失败:', response.statusText);
-          alert('删除失败，请稍后重试');
-        }
-      } catch (error) {
-        console.error('删除对话失败:', error);
-        alert('删除失败，请稍后重试');
+    try {
+      const response = await fetchWithAuth(`/api/conversations/${conversationId}`, { method: 'DELETE' });
+      if (response.ok) {
+        setConversations(prev => prev.filter(conv => conv.id !== conversationId));
+        setSelectedConversations(prev => prev.filter(id => id !== conversationId));
+        toast.success(t('history.deleteSuccess', { defaultValue: 'Conversation deleted' }));
+      } else {
+        toast.error(t('history.deleteFailed', { defaultValue: 'Delete failed' }));
       }
+    } catch {
+      toast.error(t('history.deleteFailed', { defaultValue: 'Delete failed' }));
     }
-  };
-
-  const handleOpenConversation = (conversationId: string) => {
-    // 跳转到聊天页面并加载指定对话
-    navigate(`/chat?conversation=${conversationId}`);
   };
 
   const formatDate = (dateString: string) => {
@@ -155,166 +112,193 @@ export default function History() {
     const now = new Date();
     const diffTime = Math.abs(now.getTime() - date.getTime());
     const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-
-    if (diffDays === 1) {
-      return t('time.today');
-    } else if (diffDays === 2) {
-      return t('time.yesterday');
-    } else if (diffDays <= 7) {
-      return t('time.daysAgo', { count: diffDays - 1 });
-    } else {
-      return date.toLocaleDateString();
-    }
+    if (diffDays === 1) return t('time.today');
+    if (diffDays === 2) return t('time.yesterday');
+    if (diffDays <= 7) return t('time.daysAgo', { count: diffDays - 1 });
+    return date.toLocaleDateString();
   };
 
   const getProviderName = (provider?: string) => {
-    const providerNames: Record<string, string> = {
-      openai: 'OpenAI',
-      claude: 'Claude',
-      gemini: 'Gemini',
-      xai: 'xAI',
-      ollama: 'Ollama'
-    };
-    return provider ? providerNames[provider] || provider : '未知';
+    const names: Record<string, string> = { openai: 'OpenAI', claude: 'Claude', gemini: 'Gemini', xai: 'xAI', ollama: 'Ollama' };
+    return provider ? names[provider] || provider : 'Unknown';
   };
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      {/* 头部 */}
-      <div className="bg-white border-b border-gray-200">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="py-6">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center space-x-4">
-                <Link
-                  to="/"
-                  className="inline-flex items-center text-sm font-medium text-gray-500 hover:text-gray-700"
-                >
-                  <ArrowLeft className="w-4 h-4 mr-2" />
-                  返回聊天
+    <div className="min-h-screen bg-background">
+      {/* Header */}
+      <div className="border-b border-border bg-background">
+        <div className="max-w-4xl mx-auto px-4 sm:px-6 py-6">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-4">
+              <Button variant="ghost" size="sm" asChild>
+                <Link to="/">
+                  <ArrowLeft className="h-4 w-4 mr-1" />
+                  {t('history.backToChat', { defaultValue: '返回聊天' })}
                 </Link>
-                <div>
-                  <h1 className="text-2xl font-bold text-gray-900">对话历史</h1>
-                  <p className="mt-1 text-sm text-gray-500">
-                    管理和查看您的所有AI对话记录
-                  </p>
-                </div>
+              </Button>
+              <div>
+                <h1 className="text-xl font-semibold text-foreground">
+                  {t('history.title', { defaultValue: '对话历史' })}
+                </h1>
+                <p className="text-sm text-muted-foreground mt-0.5">
+                  {t('history.description', { defaultValue: '管理和查看您的所有AI对话记录' })}
+                </p>
               </div>
-              {selectedConversations.length > 0 && (
-                <button
-                  onClick={handleDeleteSelected}
-                  className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-red-600 hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500"
-                >
-                  <Trash2 className="w-4 h-4 mr-2" />
-                  删除选中 ({selectedConversations.length})
-                </button>
-              )}
             </div>
+            {selectedConversations.length > 0 && (
+              <AlertDialog>
+                <AlertDialogTrigger asChild>
+                  <Button variant="destructive" size="sm">
+                    <Trash2 className="h-4 w-4 mr-1" />
+                    {t('history.deleteSelected', { defaultValue: '删除选中' })} ({selectedConversations.length})
+                  </Button>
+                </AlertDialogTrigger>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>{t('history.confirmDelete', { defaultValue: '确认删除' })}</AlertDialogTitle>
+                    <AlertDialogDescription>
+                      {t('history.confirmDeleteDescription', { defaultValue: `确定要删除选中的 ${selectedConversations.length} 个对话吗？`, count: selectedConversations.length })}
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel>{t('common.cancel', { defaultValue: 'Cancel' })}</AlertDialogCancel>
+                    <AlertDialogAction onClick={handleDeleteSelected} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+                      {t('common.delete', { defaultValue: 'Delete' })}
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
+            )}
+          </div>
 
-            {/* 搜索栏 */}
-            <div className="mt-6">
-              <div className="relative">
-                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                  <Search className="h-5 w-5 text-gray-400" />
-                </div>
-                <input
-                  type="text"
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="block w-full pl-10 pr-3 py-2 border border-gray-300 rounded-md leading-5 bg-white placeholder-gray-500 focus:outline-none focus:placeholder-gray-400 focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
-                  placeholder="搜索对话..."
-                />
-              </div>
-            </div>
+          <div className="mt-4 relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <Input
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="pl-9"
+              placeholder={t('history.searchPlaceholder', { defaultValue: '搜索对话...' })}
+            />
           </div>
         </div>
       </div>
 
-      {/* 内容区域 */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      {/* Content */}
+      <div className="max-w-4xl mx-auto px-4 sm:px-6 py-6">
         {isLoading ? (
-          <div className="flex items-center justify-center py-12">
-            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500"></div>
-            <span className="ml-2 text-gray-500">加载中...</span>
+          <div className="space-y-4">
+            {[1, 2, 3].map((i) => (
+              <Card key={i}>
+                <CardContent className="p-6">
+                  <div className="space-y-3">
+                    <Skeleton className="h-5 w-2/3" />
+                    <Skeleton className="h-4 w-full" />
+                    <div className="flex gap-2">
+                      <Skeleton className="h-4 w-20" />
+                      <Skeleton className="h-4 w-24" />
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
           </div>
         ) : filteredConversations.length === 0 ? (
-          <div className="text-center py-12">
-            <MessageSquare className="mx-auto h-12 w-12 text-gray-400" />
-            <h3 className="mt-2 text-sm font-medium text-gray-900">
-              {searchQuery ? '未找到匹配的对话' : '暂无对话历史'}
+          <div className="text-center py-16">
+            <MessageSquare className="mx-auto h-12 w-12 text-muted-foreground/50" />
+            <h3 className="mt-3 text-sm font-medium text-foreground">
+              {searchQuery
+                ? t('history.noResults', { defaultValue: '未找到匹配的对话' })
+                : t('history.empty', { defaultValue: '暂无对话历史' })
+              }
             </h3>
-            <p className="mt-1 text-sm text-gray-500">
-              {searchQuery ? '尝试使用不同的关键词搜索' : (
-                <>
-                  开始您的第一次AI对话吧 {' '}
-                  <Link to="/chat" className="text-blue-600 hover:text-blue-500">
-                    立即开始
-                  </Link>
-                </>
-              )}
+            <p className="mt-1 text-sm text-muted-foreground">
+              {searchQuery
+                ? t('history.tryDifferent', { defaultValue: '尝试使用不同的关键词搜索' })
+                : (
+                  <>
+                    {t('history.startFirst', { defaultValue: '开始您的第一次AI对话' })}{' '}
+                    <Link to="/chat" className="text-primary hover:text-primary/80">
+                      {t('history.startNow', { defaultValue: '立即开始' })}
+                    </Link>
+                  </>
+                )
+              }
             </p>
           </div>
         ) : (
-          <div className="grid gap-4">
+          <div className="space-y-3">
             {filteredConversations.map((conversation) => (
-              <div
-                key={conversation.id}
-                className="bg-white rounded-lg border border-gray-200 hover:border-gray-300 transition-colors duration-200"
-              >
-                <div className="p-6">
-                  <div className="flex items-start justify-between">
-                    <div className="flex items-start space-x-3 flex-1">
+              <Card key={conversation.id} className="hover:shadow-md transition-shadow">
+                <CardContent className="p-4">
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="flex items-start gap-3 flex-1 min-w-0">
                       <input
                         type="checkbox"
                         checked={selectedConversations.includes(conversation.id)}
                         onChange={() => handleSelectConversation(conversation.id)}
-                        className="mt-1 h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+                        className="mt-1.5 h-4 w-4 rounded border-input"
                       />
-                      <div className="flex-1 min-w-0 cursor-pointer" onClick={() => handleOpenConversation(conversation.id)}>
-                        <h3 className="text-lg font-medium text-gray-900 truncate hover:text-blue-600 transition-colors">
+                      <div
+                        className="flex-1 min-w-0 cursor-pointer"
+                        onClick={() => navigate(`/chat?conversation=${conversation.id}`)}
+                      >
+                        <h3 className="font-medium text-foreground truncate hover:text-primary transition-colors">
                           {conversation.title}
                         </h3>
-                        <p className="mt-1 text-sm text-gray-500 line-clamp-2">
+                        <p className="mt-1 text-sm text-muted-foreground line-clamp-2">
                           {conversation.preview}
                         </p>
-                        <div className="mt-3 flex items-center space-x-4 text-xs text-gray-500">
-                          <div className="flex items-center">
-                            <Calendar className="w-3 h-3 mr-1" />
+                        <div className="mt-2 flex items-center gap-3 text-xs text-muted-foreground">
+                          <span className="flex items-center gap-1">
+                            <Calendar className="h-3 w-3" />
                             {formatDate(conversation.created_at)}
-                          </div>
-                          <div className="flex items-center">
-                            <MessageSquare className="w-3 h-3 mr-1" />
-                            {conversation.message_count} 条消息
-                          </div>
+                          </span>
+                          <span className="flex items-center gap-1">
+                            <MessageSquare className="h-3 w-3" />
+                            {conversation.message_count} {t('history.messages', { defaultValue: '条消息' })}
+                          </span>
                           {conversation.provider_used && (
-                            <div className="flex items-center">
-                              <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-800">
-                                {getProviderName(conversation.provider_used)}
-                              </span>
-                            </div>
+                            <Badge variant="secondary" className="text-[10px]">
+                              {getProviderName(conversation.provider_used)}
+                            </Badge>
                           )}
                         </div>
                       </div>
                     </div>
-                    <div className="flex items-center space-x-2">
-                      <button 
-                        onClick={() => handleOpenConversation(conversation.id)}
-                        className="text-gray-400 hover:text-blue-600 transition-colors"
-                        title="打开对话"
+                    <div className="flex items-center gap-1">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8"
+                        onClick={() => navigate(`/chat?conversation=${conversation.id}`)}
                       >
-                        <ExternalLink className="w-4 h-4" />
-                      </button>
-                      <button 
-                        onClick={() => handleDeleteSingle(conversation.id)}
-                        className="text-gray-400 hover:text-red-600 transition-colors"
-                        title="删除对话"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
+                        <ExternalLink className="h-3.5 w-3.5" />
+                      </Button>
+                      <AlertDialog>
+                        <AlertDialogTrigger asChild>
+                          <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-destructive">
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </Button>
+                        </AlertDialogTrigger>
+                        <AlertDialogContent>
+                          <AlertDialogHeader>
+                            <AlertDialogTitle>{t('history.confirmDeleteSingle', { defaultValue: '删除对话？' })}</AlertDialogTitle>
+                            <AlertDialogDescription>
+                              {t('history.confirmDeleteSingleDescription', { defaultValue: '此操作不可撤销。' })}
+                            </AlertDialogDescription>
+                          </AlertDialogHeader>
+                          <AlertDialogFooter>
+                            <AlertDialogCancel>{t('common.cancel', { defaultValue: 'Cancel' })}</AlertDialogCancel>
+                            <AlertDialogAction onClick={() => handleDeleteSingle(conversation.id)} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+                              {t('common.delete', { defaultValue: 'Delete' })}
+                            </AlertDialogAction>
+                          </AlertDialogFooter>
+                        </AlertDialogContent>
+                      </AlertDialog>
                     </div>
                   </div>
-                </div>
-              </div>
+                </CardContent>
+              </Card>
             ))}
           </div>
         )}

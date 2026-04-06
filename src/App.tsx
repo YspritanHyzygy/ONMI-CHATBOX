@@ -1,4 +1,7 @@
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
+import { Toaster } from 'sonner';
+import { ThemeProvider } from './components/ThemeProvider';
+import { TooltipProvider } from './components/ui/tooltip';
 import Chat from './pages/Chat';
 import Settings from './pages/Settings';
 import AuthPage from './pages/AuthPage';
@@ -6,38 +9,40 @@ import ProtectedRoute from './components/ProtectedRoute';
 
 function App() {
   return (
-    <Router>
-      <Routes>
-        {/* 认证页面 - 不需要登录 */}
-        <Route path="/auth" element={<AuthPage />} />
-        
-        {/* 受保护的页面 - 需要登录 */}
-        <Route 
-          path="/" 
-          element={
-            <ProtectedRoute>
-              <Chat />
-            </ProtectedRoute>
-          } 
-        />
-        <Route 
-          path="/chat" 
-          element={
-            <ProtectedRoute>
-              <Chat />
-            </ProtectedRoute>
-          } 
-        />
-        <Route 
-          path="/settings" 
-          element={
-            <ProtectedRoute>
-              <Settings />
-            </ProtectedRoute>
-          } 
-        />
-      </Routes>
-    </Router>
+    <ThemeProvider defaultTheme="system" storageKey="theme">
+      <TooltipProvider>
+        <Router>
+          <Routes>
+            <Route path="/auth" element={<AuthPage />} />
+            <Route
+              path="/"
+              element={
+                <ProtectedRoute>
+                  <Chat />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/chat"
+              element={
+                <ProtectedRoute>
+                  <Chat />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/settings"
+              element={
+                <ProtectedRoute>
+                  <Settings />
+                </ProtectedRoute>
+              }
+            />
+          </Routes>
+        </Router>
+        <Toaster position="top-center" richColors />
+      </TooltipProvider>
+    </ThemeProvider>
   );
 }
 
