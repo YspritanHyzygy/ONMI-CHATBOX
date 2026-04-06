@@ -38,6 +38,7 @@ interface ProviderSettingsProps {
   setAsDefault: (providerId: string) => void;
   manualSaveConfig: (providerId: string) => void;
   testConnection: (providerId: string) => void;
+  testProviderConnection: (providerId: string) => void;
   fetchModels: (providerId: string) => void;
   togglePasswordVisibility: (providerId: string, fieldName: string) => void;
   setTestModels: React.Dispatch<React.SetStateAction<Record<string, string>>>;
@@ -63,6 +64,7 @@ export default function ProviderSettings({
   setAsDefault,
   manualSaveConfig,
   testConnection,
+  testProviderConnection,
   fetchModels,
   togglePasswordVisibility,
   setTestModels,
@@ -72,13 +74,12 @@ export default function ProviderSettings({
 }: ProviderSettingsProps) {
   const { t } = useTranslation();
 
-  // Combined "Test & Refresh Models" handler
-  const handleTestAndRefresh = async () => {
-    fetchModels(provider.id);
-    testConnection(provider.id);
-  };
+  // 三个独立操作：拉模型 / 保存 / 测试连接（免费）
+  const handleFetchModels = () => fetchModels(provider.id);
+  const handleSave = () => manualSaveConfig(provider.id);
+  const handleTestProvider = () => testProviderConnection(provider.id);
 
-  // Test a specific model directly from the model row
+  // Test a specific model directly from the model row (paid path: 真的会发推理请求)
   const handleTestModel = (modelId: string) => {
     setTestModels((prev) => ({ ...prev, [provider.id]: modelId }));
     testConnection(provider.id);
@@ -86,8 +87,13 @@ export default function ProviderSettings({
 
   const isFetching = (fetchingModels && fetchingModels[provider.id]) || false;
   const isTesting = testingProvider === provider.id;
-  const isBusy = isFetching || isTesting;
   const isSaving = manualSaving[provider.id];
+
+  // 必填字段缺失时禁用 Fetch / Test（Save 按钮另行处理：会显示错误而不是禁用）
+  const requiredFieldMissing =
+    !config ||
+    (provider.id !== 'ollama' && !config?.config.api_key) ||
+    (provider.id === 'ollama' && !config?.config.base_url);
   const currentSaveStatus = saveStatus[provider.id];
   const responsesTestResult = testResults[`${provider.id}-responses`];
 
@@ -296,24 +302,33 @@ export default function ProviderSettings({
               )}
             </div>
 
-            {/* Action buttons: Save (secondary) + Test & Refresh (primary) */}
+            {/* Action buttons: Fetch Models + Save + Test Connection */}
             <div className="flex gap-2">
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => manualSaveConfig(provider.id)}
+                onClick={handleFetchModels}
+                disabled={isFetching || requiredFieldMissing}
+              >
+                <Search className={cn('w-4 h-4 mr-2', isFetching && 'animate-pulse')} />
+                {isFetching ? t('settings.fetching') : t('settings.fetchModels')}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleSave}
                 disabled={isSaving || !config}
               >
-                <Save className="w-4 h-4 mr-2" />
+                <Save className={cn('w-4 h-4 mr-2', isSaving && 'animate-pulse')} />
                 {isSaving ? t('settings.saving') : t('common.save')}
               </Button>
               <Button
                 size="sm"
-                onClick={handleTestAndRefresh}
-                disabled={isBusy || !config}
+                onClick={handleTestProvider}
+                disabled={isTesting || requiredFieldMissing}
               >
-                <Zap className={cn('w-4 h-4 mr-2', isBusy && 'animate-pulse')} />
-                {isBusy ? t('settings.testing') : t('settings.testAndRefresh')}
+                <Zap className={cn('w-4 h-4 mr-2', isTesting && 'animate-pulse')} />
+                {isTesting ? t('settings.testing') : t('settings.testConnection')}
               </Button>
             </div>
           </div>

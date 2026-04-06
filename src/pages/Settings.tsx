@@ -41,6 +41,13 @@ export default function Settings() {
 
   const processedConfigsRef = useRef<Set<string>>(new Set());
 
+  // configs 的 ref 镜像：防抖 setTimeout 会捕获旧的 saveConfig 闭包，
+  // 那个闭包里的 configs 是过期的。所有 saveConfig 内部对 configs 的读取
+  // 都必须走这个 ref 而不是闭包变量，否则粘贴 API Key 后 1 秒触发的自动保存
+  // 会看到空的 configs 并抛 "配置不存在"。
+  const configsRef = useRef<ProviderConfig[]>([]);
+  useEffect(() => { configsRef.current = configs; }, [configs]);
+
   // Reset confirmation state
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [showResetLoading, setShowResetLoading] = useState(false);
@@ -315,47 +322,52 @@ export default function Settings() {
 
   const saveConfig = async (providerId: string, silent: boolean = false, isManual: boolean = false) => {
     try {
-      const config = getProviderConfig(providerId);
+      // 走 ref 而不是闭包：防抖 setTimeout 捕获的是旧的 saveConfig 实例，
+      // 那个实例的 configs 闭包可能还是空数组（尤其是粘贴 API Key 后的首次自动保存）
+      const config = configsRef.current.find(c => c.provider === providerId);
       if (!config) throw new Error('配置不存在');
-      const shouldClearConfig = (providerId === 'ollama' && (!config.config.base_url || config.config.base_url.trim() === '')) ||
-                               (providerId !== 'ollama' && (!config.config.api_key || config.config.api_key.trim() === ''));
-      if (shouldClearConfig) {
-        const userId = getUserId();
-        const response = await fetchWithAuth(`/api/providers/config?userId=${encodeURIComponent(userId)}&providerName=${encodeURIComponent(providerId)}`, { method: 'DELETE', headers: { 'Content-Type': 'application/json' } });
-        if (response.ok) {
-          setConfigs(prev => prev.filter(c => c.provider !== providerId));
-          setModelFetchResults(prev => { const updated = { ...prev }; delete updated[providerId]; return updated; });
-          setTestResults(prev => { const updated = { ...prev }; delete updated[providerId]; return updated; });
-          if (!silent) {
-            setSaveStatus(prev => ({ ...prev, [providerId]: { status: 'success', message: isManual ? '配置已手动清除' : '配置已清除', timestamp: Date.now() } }));
-            setTimeout(() => { setSaveStatus(prev => ({ ...prev, [providerId]: { status: 'idle', message: '' } })); }, isManual ? 800 : 3000);
-          }
-          return;
-        } else { throw new Error('清除配置失败'); }
+
+      // 必填字段未填时：
+      // - 静默自动保存 → 直接 return（用户还在编辑，不打扰，也不删除已有配置）
+      // - 手动保存 → 显示错误提示，但不再删除已有配置
+      const missingRequired =
+        (providerId === 'ollama' && (!config.config.base_url || config.config.base_url.trim() === '')) ||
+        (providerId !== 'ollama' && (!config.config.api_key || config.config.api_key.trim() === ''));
+      if (missingRequired) {
+        if (!silent) {
+          const msgKey = providerId === 'ollama' ? 'settings.baseUrlMissing' : 'settings.apiKeyMissing';
+          setSaveStatus(prev => ({ ...prev, [providerId]: { status: 'error', message: t(msgKey), timestamp: Date.now() } }));
+          setTimeout(() => { setSaveStatus(prev => ({ ...prev, [providerId]: { status: 'idle', message: '' } })); }, 5000);
+        }
+        return;
       }
-      if (providerId !== 'ollama' && !config.config.api_key) throw new Error('API Key 是必填项');
-      if (providerId === 'ollama' && !config.config.base_url) throw new Error('Base URL 是必填项');
+
       const userId = getUserId();
       const response = await fetchWithAuth('/api/providers/config', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ userId, providerName: providerId, apiKey: config.config.api_key, baseUrl: config.config.base_url, availableModels: config.models || modelFetchResults[providerId]?.models || [], defaultModel: config.model, extraConfig: config.config }),
       });
-      const result = await response.json();
-      if (!result.success) throw new Error(result.error || '保存配置失败');
+      // 非 2xx 响应（401/403/500 等）也要解析错误信息，否则用户只看到"保存失败"不知道原因
+      const result = await response.json().catch(() => ({ success: false, error: `HTTP ${response.status}` }));
+      if (!response.ok || !result.success) {
+        throw new Error(result.error || `保存配置失败 (HTTP ${response.status})`);
+      }
       const selectedModelData = { provider: providerId, providerName: getProviderDisplayName(providerId), model: config.model, displayName: config.model };
       setStorageItem('selectedModel', selectedModelData);
       window.dispatchEvent(new Event('localStorageChanged'));
-      if (!silent) {
-        setSaveStatus(prev => ({ ...prev, [providerId]: { status: 'success', message: isManual ? '配置已手动保存' : '配置已保存', timestamp: Date.now() } }));
-        setTimeout(() => { setSaveStatus(prev => ({ ...prev, [providerId]: { status: 'idle', message: '' } })); }, isManual ? 800 : 3000);
-      }
+
+      // 手动保存和自动保存都展示反馈，自动保存使用更短的停留时间
+      const statusMessage = isManual ? t('settings.configSaved') : t('settings.autoSaved');
+      const timeoutMs = isManual ? 1200 : 1500;
+      setSaveStatus(prev => ({ ...prev, [providerId]: { status: 'success', message: statusMessage, timestamp: Date.now() } }));
+      setTimeout(() => { setSaveStatus(prev => ({ ...prev, [providerId]: { status: 'idle', message: '' } })); }, timeoutMs);
     } catch (error) {
       console.error('保存配置失败:', error);
-      if (!silent) {
-        setSaveStatus(prev => ({ ...prev, [providerId]: { status: 'error', message: isManual ? '手动保存失败，请重试' : '保存失败，请重试', timestamp: Date.now() } }));
-        setTimeout(() => { setSaveStatus(prev => ({ ...prev, [providerId]: { status: 'idle', message: '' } })); }, 5000);
-      }
+      // 把后端真实的错误消息带出来，用户才知道是网络、认证还是其他问题
+      const errorMessage = error instanceof Error ? error.message : t('settings.configSaveFailed');
+      setSaveStatus(prev => ({ ...prev, [providerId]: { status: 'error', message: `${t('settings.configSaveFailed')}: ${errorMessage}`, timestamp: Date.now() } }));
+      setTimeout(() => { setSaveStatus(prev => ({ ...prev, [providerId]: { status: 'idle', message: '' } })); }, 5000);
     } finally {
       if (isManual) setManualSaving(prev => ({ ...prev, [providerId]: false }));
     }
@@ -405,6 +417,78 @@ export default function Settings() {
       setTestResults(prev => ({ ...prev, [providerId]: { success: result.success, message: result.success ? `连接测试成功！使用模型: ${testModel}` : (result.error || '连接测试失败，请检查配置。') } }));
     } catch (error) {
       setTestResults(prev => ({ ...prev, [providerId]: { success: false, message: error instanceof Error ? error.message : '测试过程中发生错误' } }));
+    } finally {
+      setTestingProvider(null);
+    }
+  };
+
+  // 免费的连接测试：不传 model，仅触发后端的 models.list 等免费元数据路径。
+  // Ollama 例外：后端 /test 对 Ollama 要求必须带 model，所以改用 /models（同样免费）。
+  const testProviderConnection = async (providerId: string) => {
+    try {
+      setTestingProvider(providerId);
+      const config = getProviderConfig(providerId);
+      if (!config) {
+        setTestResults(prev => ({ ...prev, [providerId]: { success: false, message: t('settings.apiKeyRequired_toast') } }));
+        return;
+      }
+      if (providerId !== 'ollama' && !config.config.api_key) {
+        setTestResults(prev => ({ ...prev, [providerId]: { success: false, message: t('settings.apiKeyRequired_toast') } }));
+        return;
+      }
+      if (providerId === 'ollama' && !config.config.base_url) {
+        setTestResults(prev => ({ ...prev, [providerId]: { success: false, message: t('settings.baseUrlMissing') } }));
+        return;
+      }
+
+      // Ollama：后端 /test 强制要求带 model，所以走 /models 端点（同样免费）
+      if (providerId === 'ollama') {
+        const response = await fetchWithAuth('/api/providers/models', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ providerName: providerId, apiKey: config.config.api_key, baseUrl: config.config.base_url }),
+        });
+        const result = await response.json();
+        const modelCount = result.data?.models?.length || 0;
+        setTestResults(prev => ({
+          ...prev,
+          [providerId]: {
+            success: !!result.success,
+            message: result.success
+              ? t('settings.connectionOk', { count: modelCount })
+              : (result.error || t('settings.connectionFailed')),
+          },
+        }));
+        return;
+      }
+
+      // 其他 provider：POST /test 但不传 model —— 后端会跳过 testSpecificModel 的付费路径
+      const response = await fetchWithAuth('/api/providers/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          providerName: providerId,
+          apiKey: config.config.api_key,
+          baseUrl: config.config.base_url,
+          // 故意不传 model
+        }),
+      });
+      const result = await response.json();
+      const modelCount = result.data?.models?.length || 0;
+      setTestResults(prev => ({
+        ...prev,
+        [providerId]: {
+          success: !!result.success,
+          message: result.success
+            ? t('settings.connectionOk', { count: modelCount })
+            : (result.error || t('settings.connectionFailed')),
+        },
+      }));
+    } catch (error) {
+      setTestResults(prev => ({
+        ...prev,
+        [providerId]: { success: false, message: error instanceof Error ? error.message : t('settings.networkError') },
+      }));
     } finally {
       setTestingProvider(null);
     }
@@ -487,7 +571,8 @@ export default function Settings() {
         setModelFetchResults(prev => ({ ...prev, [providerId]: { success: true, models: regularModels, researchModels, message: providerId === 'ollama' && regularModels.length > 0 ? `${t('settings.fetchModelsSuccess')} 已自动选择默认模型: ${defaultModel}, 测试模型: ${testModel}` : t('settings.fetchModelsSuccess') } }));
         setTimeout(async () => {
           try {
-            const updatedConfig = getProviderConfig(providerId);
+            // 同样走 ref 避免 setTimeout 闭包过期
+            const updatedConfig = configsRef.current.find(c => c.provider === providerId);
             if (updatedConfig) {
               const userId = getUserId();
               const resp = await fetchWithAuth('/api/providers/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId, providerName: providerId, apiKey: updatedConfig.config.api_key, baseUrl: updatedConfig.config.base_url, availableModels: allModelsForSaving, defaultModel }) });
@@ -575,6 +660,7 @@ export default function Settings() {
             setAsDefault={setAsDefault}
             manualSaveConfig={manualSaveConfig}
             testConnection={testConnection}
+            testProviderConnection={testProviderConnection}
             fetchModels={fetchModels}
             togglePasswordVisibility={togglePasswordVisibility}
             setTestModels={setTestModels}
