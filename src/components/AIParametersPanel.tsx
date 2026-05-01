@@ -205,7 +205,7 @@ export default function AIParametersPanel({ onParametersChange, className = '', 
     } else {
       onParametersChange(DEFAULT_PARAMS);
     }
-  }, [onParametersChange]);
+  }, [onParametersChange, validateParameters]);
 
   useEffect(() => {
     if (selectedModel?.provider) {
@@ -267,7 +267,7 @@ export default function AIParametersPanel({ onParametersChange, className = '', 
           )}
         </Button>
       </PopoverTrigger>
-      <PopoverContent className="w-80 p-0" align="end">
+      <PopoverContent className="ai-parameters-popover w-80 p-0" align="end">
         <div className="p-4 max-h-[70vh] overflow-y-auto custom-scrollbar">
           <div className="flex items-center justify-between mb-4">
             <h4 className="text-sm font-semibold">{t('parameters.title')}</h4>

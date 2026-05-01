@@ -5,6 +5,8 @@ import { TooltipProvider } from './components/ui/tooltip';
 import Chat from './pages/Chat';
 import Settings from './pages/Settings';
 import AuthPage from './pages/AuthPage';
+import DataPage from './pages/Data';
+import UsagePage from './pages/Usage';
 import ProtectedRoute from './components/ProtectedRoute';
 
 function App() {
@@ -35,6 +37,22 @@ function App() {
               element={
                 <ProtectedRoute>
                   <Settings />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/data"
+              element={
+                <ProtectedRoute>
+                  <DataPage />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/usage"
+              element={
+                <ProtectedRoute>
+                  <UsagePage />
                 </ProtectedRoute>
               }
             />

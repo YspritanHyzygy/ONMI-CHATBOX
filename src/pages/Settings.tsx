@@ -3,18 +3,28 @@ import { useTranslation } from 'react-i18next';
 import { getUserId } from '../lib/user';
 import { setStorageItem, getStorageItem } from '../lib/storage';
 import { fetchWithAuth } from '../lib/fetch';
-import SettingsLayout from '../components/settings/SettingsLayout';
 import ProviderSettings from '../components/settings/ProviderSettings';
 import UserManagement from '../components/settings/UserManagement';
 import LanguageSettings from '../components/settings/LanguageSettings';
 import CacheManagement from '../components/settings/CacheManagement';
 import type { AIProvider, ProviderConfig } from '../components/settings/types';
+import OnmiTopBar from '@/components/onmi/OnmiTopBar';
+import { OnmiPageShell, OnmiStaticSidebar } from '@/components/onmi/OnmiShell';
+import { OnmiRule, ProviderGlyph, StatusDot } from '@/components/onmi/OnmiPrimitives';
+import { PROVIDER_ORDER, getProviderName } from '@/components/onmi/providerMeta';
+import { useOnmiCopy } from '@/components/onmi/useOnmiCopy';
+import { cn } from '@/lib/utils';
 
 export default function Settings() {
   const { t } = useTranslation();
+  const copy = useOnmiCopy();
   const [providers, setProviders] = useState<AIProvider[]>([]);
   const [configs, setConfigs] = useState<ProviderConfig[]>([]);
   const [activeTab, setActiveTabState] = useState<string>('');
+  const [showSidebar, setShowSidebar] = useState(() => {
+    if (typeof window === 'undefined') return true;
+    return window.innerWidth >= 900;
+  });
 
   const setActiveTab = (tab: string) => {
     setActiveTabState(tab);
@@ -623,30 +633,22 @@ export default function Settings() {
 
   // ─── Render ───────────────────────────────────────────────────────
 
-  if (isLoading) {
-    return (
-      <div className="min-h-screen bg-background flex items-center justify-center">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" />
-        <span className="ml-2 text-muted-foreground">{t('common.loading')}</span>
-      </div>
-    );
-  }
+  const sortedProviders = [...providers].sort((a, b) => {
+    const ai = PROVIDER_ORDER.indexOf(a.id);
+    const bi = PROVIDER_ORDER.indexOf(b.id);
+    return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
+  });
+  const configuredProviderCount = providers.filter((provider) => isProviderConfigured(provider.id, getProviderConfig(provider.id))).length;
+  const activeProvider = providers.find((provider) => provider.id === activeTab);
 
-  return (
-    <SettingsLayout
-      providers={providers}
-      activeTab={activeTab}
-      setActiveTab={setActiveTab}
-      getProviderConfig={getProviderConfig}
-    >
-      {providers.map((provider) => {
-        if (activeTab !== provider.id) return null;
-        return (
+  const renderActivePanel = () => {
+    if (activeProvider) {
+      return (
           <ProviderSettings
-            key={provider.id}
-            provider={provider}
-            config={getProviderConfig(provider.id)}
-            testResult={testResults[provider.id]}
+          key={activeProvider.id}
+          provider={activeProvider}
+          config={getProviderConfig(activeProvider.id)}
+          testResult={testResults[activeProvider.id]}
             testResults={testResults}
             testingProvider={testingProvider}
             showPasswords={showPasswords}
@@ -668,11 +670,12 @@ export default function Settings() {
             setTestResults={setTestResults}
             getProviderConfig={getProviderConfig}
           />
-        );
-      })}
-      {activeTab === 'user-management' && <UserManagement />}
-      {activeTab === 'language-settings' && <LanguageSettings loadConfigs={loadConfigs} />}
-      {activeTab === 'cache-management' && (
+      );
+    }
+    if (activeTab === 'user-management') return <UserManagement />;
+    if (activeTab === 'language-settings') return <LanguageSettings loadConfigs={loadConfigs} />;
+    if (activeTab === 'cache-management') {
+      return (
         <CacheManagement
           resetAllModelsToDefault={resetAllModelsToDefault}
           resetStatus={resetStatus}
@@ -681,12 +684,192 @@ export default function Settings() {
           showResetLoading={showResetLoading}
           executeReset={executeReset}
         />
-      )}
-    </SettingsLayout>
+      );
+    }
+    return null;
+  };
+
+  if (isLoading) {
+    return (
+      <div className="onmi onmi-app">
+        <div className="onmi-loading-screen">
+          <div className="onmi-spinner" />
+          <span className="onmi-mono">{copy('加载信号源配置...', 'Loading signal sources...')}</span>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <OnmiPageShell
+      sidebarOpen={showSidebar}
+      onCloseSidebar={() => setShowSidebar(false)}
+      topbar={
+        <OnmiTopBar
+          sidebarOpen={showSidebar}
+          onToggleSidebar={() => setShowSidebar((open) => !open)}
+          provider={activeProvider?.id || 'openai'}
+          modelLabel={activeProvider ? getProviderName(activeProvider.id) : copy('设置', 'Settings')}
+          status="API · CONFIG"
+          onCommand={() => window.alert(copy('命令面板是占位功能。', 'Command palette is a placeholder.'))}
+        />
+      }
+      sidebar={<OnmiStaticSidebar activeId="settings" />}
+    >
+      <div className="onmi-settings onmi-scroll">
+        <div className="onmi-page-header">
+          <div className="onmi-section-label">CONFIG · 02 · API CREDENTIALS</div>
+          <h1>{copy('信号源 · API 凭证', 'Signal sources · API credentials')}</h1>
+          <p>
+            {copy(
+              'ONMI 保留当前项目的真实 Provider 配置、模型拉取与连接测试逻辑；自定义端点与命令面板等能力先以占位状态呈现。',
+              'ONMI keeps the real provider configuration, model fetch, and connection test flows. Custom endpoints and command palette remain placeholders.'
+            )}
+          </p>
+        </div>
+
+        <ProviderSignalBoard
+          providers={sortedProviders}
+          activeTab={activeTab}
+          configuredCount={configuredProviderCount}
+          getProviderConfig={getProviderConfig}
+          setActiveTab={setActiveTab}
+        />
+
+        <section className="onmi-settings-tabs">
+          <OnmiRule>{copy('配置面板', 'Configuration panel')}</OnmiRule>
+          <div className="onmi-utility-tabs">
+            <button type="button" className={cn(activeTab === 'user-management' && 'active')} onClick={() => setActiveTab('user-management')}>
+              {copy('用户管理', 'User management')}
+            </button>
+            <button type="button" className={cn(activeTab === 'language-settings' && 'active')} onClick={() => setActiveTab('language-settings')}>
+              {copy('语言', 'Language')}
+            </button>
+            <button type="button" className={cn(activeTab === 'cache-management' && 'active')} onClick={() => setActiveTab('cache-management')}>
+              {copy('缓存', 'Cache')}
+            </button>
+          </div>
+          <div className="onmi-settings-panel">{renderActivePanel()}</div>
+        </section>
+      </div>
+    </OnmiPageShell>
   );
 }
 
 // ─── Fallback providers (when API fails) ────────────────────────────
+
+function isProviderConfigured(providerId: string, config?: ProviderConfig): boolean {
+  if (!config) return false;
+  if (providerId === 'ollama') return Boolean(config.config.base_url?.trim());
+  return Boolean(config.config.api_key?.trim());
+}
+
+interface ProviderSignalBoardProps {
+  providers: AIProvider[];
+  activeTab: string;
+  configuredCount: number;
+  getProviderConfig: (providerId: string) => ProviderConfig | undefined;
+  setActiveTab: (tab: string) => void;
+}
+
+function ProviderSignalBoard({
+  providers,
+  activeTab,
+  configuredCount,
+  getProviderConfig,
+  setActiveTab,
+}: ProviderSignalBoardProps) {
+  const copy = useOnmiCopy();
+  const total = providers.length || 5;
+
+  return (
+    <section className="onmi-signal-board">
+      <div className="onmi-radar-card">
+        <svg viewBox="-140 -140 280 280" aria-hidden="true">
+          {[40, 70, 100, 130].map((radius) => (
+            <circle key={radius} cx="0" cy="0" r={radius} fill="none" stroke="var(--line-1)" />
+          ))}
+          <line x1="-130" y1="0" x2="130" y2="0" stroke="var(--line-1)" />
+          <line x1="0" y1="-130" x2="0" y2="130" stroke="var(--line-1)" />
+          <path d="M0,0 L130,0 A130,130 0 0,1 92,92 z" fill="var(--sig-glow)" opacity="0.55" />
+          {providers.map((provider, index) => {
+            const angle = (index / Math.max(providers.length, 1)) * Math.PI * 2 - Math.PI / 2;
+            const configured = isProviderConfigured(provider.id, getProviderConfig(provider.id));
+            const radius = configured ? 58 + index * 13 : 124;
+            const x = Math.cos(angle) * radius;
+            const y = Math.sin(angle) * radius;
+            const color = configured ? 'var(--sig)' : 'var(--fg-3)';
+            return (
+              <g key={provider.id}>
+                <line x1="0" y1="0" x2={x} y2={y} stroke={color} strokeWidth="0.5" strokeDasharray="2 3" opacity="0.45" />
+                <circle cx={x} cy={y} r="4" fill={color} />
+                <text x={x + 8} y={y + 3} style={{ fontSize: 9, fill: 'var(--fg-1)', fontFamily: 'var(--font-mono)' }}>
+                  {provider.id.toUpperCase()}
+                </text>
+              </g>
+            );
+          })}
+          <circle cx="0" cy="0" r="6" fill="var(--bg-1)" stroke="var(--sig)" strokeWidth="1.5" />
+          <circle cx="0" cy="0" r="2" fill="var(--sig)" />
+        </svg>
+        <div className="onmi-radar-caption onmi-mono">0ms --- 100ms --- 500ms+</div>
+      </div>
+
+      <div className="onmi-provider-board">
+        <div className="onmi-provider-kpis">
+          <MetricCard label={copy('已连接信号源', 'Active sources')} value={`${configuredCount}`} sub={`of ${total}`} accent />
+          <MetricCard label={copy('Provider 总数', 'Providers')} value={`${total}`} sub={copy('可配置', 'configurable')} />
+          <MetricCard label={copy('默认模型', 'Default model')} value="BYOK" sub={copy('用户自备密钥', 'bring your keys')} />
+          <MetricCard label={copy('自定义端点', 'Custom endpoint')} value="Soon" sub={copy('占位', 'placeholder')} />
+        </div>
+
+        <OnmiRule>{copy('信号源列表', 'Signal sources')} · {total}</OnmiRule>
+        <div className="onmi-provider-list">
+          {providers.map((provider) => {
+            const config = getProviderConfig(provider.id);
+            const configured = isProviderConfigured(provider.id, config);
+            const active = activeTab === provider.id;
+            return (
+              <button
+                type="button"
+                key={provider.id}
+                className={cn('onmi-provider-row', active && 'active')}
+                onClick={() => setActiveTab(provider.id)}
+              >
+                <ProviderGlyph provider={provider.id} size={30} active={active} />
+                <span>
+                  <strong>{getProviderName(provider.id)}</strong>
+                  <small className="onmi-mono">{provider.models.length || config?.models?.length || 0} models</small>
+                </span>
+                <code>{maskCredential(provider.id, config)}</code>
+                <StatusDot state={configured ? 'live' : 'off'} label={configured ? 'LIVE' : 'OFF'} />
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function MetricCard({ label, value, sub, accent = false }: { label: string; value: string; sub: string; accent?: boolean }) {
+  return (
+    <div className="onmi-metric-card">
+      <div className="onmi-section-label">{label}</div>
+      <strong className={accent ? 'accent' : ''}>{value}</strong>
+      <span className="onmi-mono">{sub}</span>
+    </div>
+  );
+}
+
+function maskCredential(providerId: string, config?: ProviderConfig): string {
+  if (!config) return 'not configured';
+  if (providerId === 'ollama') return config.config.base_url || 'not configured';
+  const key = config.config.api_key;
+  if (!key) return 'not configured';
+  if (key.length <= 10) return `${key.slice(0, 3)}...`;
+  return `${key.slice(0, 6)}...${key.slice(-4)}`;
+}
 
 function getFallbackProviders(t: (key: string) => string): AIProvider[] {
   return [
