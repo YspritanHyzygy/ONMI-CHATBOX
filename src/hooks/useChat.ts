@@ -1,6 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-import { getUserId } from '@/lib/user';
 import { fetchWithAuth } from '@/lib/fetch';
 import {
   getValidatedModel,
@@ -111,8 +110,7 @@ export function useChat() {
 
   const loadUserSettings = useCallback(async () => {
     try {
-      const userId = getUserId();
-      const response = await fetchWithAuth(`/api/providers/config?userId=${encodeURIComponent(userId)}`);
+      const response = await fetchWithAuth('/api/providers/config');
       if (response.ok) {
         const result = await response.json();
         if (result.success && result.data) {
@@ -129,8 +127,7 @@ export function useChat() {
 
   const loadConversations = useCallback(async () => {
     try {
-      const userId = getUserId();
-      const response = await fetchWithAuth(`/api/chat/conversations?userId=${userId}`);
+      const response = await fetchWithAuth('/api/chat/conversations');
       if (response.ok) {
         const data = await response.json();
         if (data.success && Array.isArray(data.conversations) && data.conversations.length > 0) {
@@ -259,7 +256,6 @@ export function useChat() {
         body: JSON.stringify({
           id: conversation.id,
           title: conversation.title,
-          userId: getUserId(),
           provider: conversation.provider,
           model: conversation.model
         })
@@ -329,7 +325,6 @@ export function useChat() {
           provider: updatedConversation.provider,
           model: updatedConversation.model,
           conversationId: updatedConversation.id,
-          userId: getUserId(),
           parameters: aiParameters
         })
       });

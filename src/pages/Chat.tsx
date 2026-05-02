@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ComponentProps, type KeyboardEvent, type RefObject } from 'react';
+import { useMemo, useState, type ComponentProps, type KeyboardEvent, type RefObject } from 'react';
 import { Link } from 'react-router-dom';
 import {
   Activity,
@@ -28,6 +28,7 @@ import OnmiTopBar from '@/components/onmi/OnmiTopBar';
 import { getProviderName } from '@/components/onmi/providerMeta';
 import { useOnmiCopy } from '@/components/onmi/useOnmiCopy';
 import { cn } from '@/lib/utils';
+import { useResponsiveSidebar } from '@/hooks/useResponsiveSidebar';
 import useAuthStore from '@/store/authStore';
 
 function useCopy() {
@@ -36,16 +37,9 @@ function useCopy() {
 
 type AIParametersPanelProps = ComponentProps<typeof AIParametersPanel>;
 
-function isNarrowViewport() {
-  return typeof window !== 'undefined' && window.matchMedia('(max-width: 899px)').matches;
-}
-
 export default function Chat() {
   const t = useCopy();
-  const [showSidebar, setShowSidebar] = useState(() => {
-    if (typeof window === 'undefined') return true;
-    return window.innerWidth >= 900;
-  });
+  const { showSidebar, setShowSidebar, closeSidebarOnNarrow } = useResponsiveSidebar();
   const [messageStyle, setMessageStyle] = useState<'doc' | 'bubble'>(() => {
     const saved = localStorage.getItem('onmi-message-style');
     return saved === 'bubble' ? 'bubble' : 'doc';
@@ -55,19 +49,6 @@ export default function Chat() {
   const provider = chat.selectedModel?.provider || chat.currentConversation?.provider || 'openai';
   const modelLabel = chat.selectedModel?.displayName || chat.currentConversation?.model || t('选择模型', 'Select model');
   const isStreaming = chat.isLoading || Boolean(chat.currentConversation?.messages.some((msg) => msg.isTyping));
-
-  useEffect(() => {
-    const media = window.matchMedia('(max-width: 899px)');
-    const handleChange = (event: MediaQueryListEvent) => {
-      setShowSidebar(!event.matches);
-    };
-    media.addEventListener('change', handleChange);
-    return () => media.removeEventListener('change', handleChange);
-  }, []);
-
-  const closeSidebarOnNarrow = () => {
-    if (isNarrowViewport()) setShowSidebar(false);
-  };
 
   const handleConversationSelect = (conversation: Conversation) => {
     chat.handleConversationSelect(conversation);

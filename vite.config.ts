@@ -44,5 +44,22 @@ export default defineConfig({
         },
       }
     }
+  },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (!id.includes('node_modules')) return undefined;
+          if (id.includes('react-markdown') || id.includes('remark-') || id.includes('rehype-') || id.includes('highlight')) {
+            return 'markdown-vendor';
+          }
+          if (id.includes('lucide-react')) return 'icons-vendor';
+          if (id.includes('@radix-ui')) return 'radix-vendor';
+          if (id.includes('i18next')) return 'i18n-vendor';
+          if (id.includes('react') || id.includes('zustand') || id.includes('react-router')) return 'react-vendor';
+          return 'vendor';
+        },
+      },
+    },
   }
 })

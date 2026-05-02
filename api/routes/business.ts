@@ -4,6 +4,7 @@
  */
 import { Router, Request, Response } from 'express';
 import { ensureDatabaseInitialized } from '../services/database-init.js';
+import { resolveAuthenticatedUserId } from '../middleware/auth.js';
 
 const router = Router();
 
@@ -49,7 +50,15 @@ const BUSINESS_CONFIG = {
  */
 router.get('/subscription/:userId', async (req: Request, res: Response): Promise<void> => {
   try {
-    const { userId } = req.params;
+    const scopedUser = resolveAuthenticatedUserId(req, req.params.userId);
+    if (!scopedUser.ok) {
+      res.status(scopedUser.status).json({
+        success: false,
+        error: scopedUser.error
+      });
+      return;
+    }
+    const userId = scopedUser.userId;
 
     if (!BUSINESS_CONFIG.enabled) {
       // 如果未启用商业化功能，返回免费计划
@@ -103,7 +112,15 @@ router.get('/subscription/:userId', async (req: Request, res: Response): Promise
  */
 router.get('/usage/:userId', async (req: Request, res: Response): Promise<void> => {
   try {
-    const { userId } = req.params;
+    const scopedUser = resolveAuthenticatedUserId(req, req.params.userId);
+    if (!scopedUser.ok) {
+      res.status(scopedUser.status).json({
+        success: false,
+        error: scopedUser.error
+      });
+      return;
+    }
+    const userId = scopedUser.userId;
     const { period: _period = 'daily' } = req.query as { period?: 'daily' | 'monthly' };
 
     const db = await ensureDatabaseInitialized();
@@ -222,11 +239,19 @@ router.get('/plans', async (_req: Request, res: Response): Promise<void> => {
  */
 router.post('/subscribe', async (req: Request, res: Response): Promise<void> => {
   try {
-    const { userId: _userId, planId: _planId, paymentMethod: _paymentMethod } = req.body as {
+    const { userId: requestedUserId, planId: _planId, paymentMethod: _paymentMethod } = req.body as {
       userId?: string;
       planId?: string;
       paymentMethod?: string;
     };
+    const scopedUser = resolveAuthenticatedUserId(req, requestedUserId);
+    if (!scopedUser.ok) {
+      res.status(scopedUser.status).json({
+        success: false,
+        error: scopedUser.error
+      });
+      return;
+    }
 
     if (!BUSINESS_CONFIG.enabled) {
       res.status(400).json({
@@ -262,10 +287,18 @@ router.post('/subscribe', async (req: Request, res: Response): Promise<void> => 
  */
 router.post('/api-keys', async (req: Request, res: Response): Promise<void> => {
   try {
-    const { userId: _userId, name: _name } = req.body as {
+    const { userId: requestedUserId, name: _name } = req.body as {
       userId?: string;
       name?: string;
     };
+    const scopedUser = resolveAuthenticatedUserId(req, requestedUserId);
+    if (!scopedUser.ok) {
+      res.status(scopedUser.status).json({
+        success: false,
+        error: scopedUser.error
+      });
+      return;
+    }
 
     if (!BUSINESS_CONFIG.enabled) {
       res.status(400).json({
@@ -296,12 +329,15 @@ router.post('/api-keys', async (req: Request, res: Response): Promise<void> => {
 export function checkFeaturePermission(_feature: string) {
   return async (req: Request, res: Response, next: any) => {
     try {
-      const userId = req.body.userId || req.params.userId || req.query.userId;
-      
-      if (!userId) {
-        res.status(401).json({
+      const scopedUser = resolveAuthenticatedUserId(
+        req,
+        req.body.userId || req.params.userId || req.query.userId
+      );
+
+      if (!scopedUser.ok) {
+        res.status(scopedUser.status).json({
           success: false,
-          error: '未提供用户ID'
+          error: scopedUser.error
         });
         return;
       }

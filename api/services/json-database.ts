@@ -81,6 +81,23 @@ interface DatabaseSchema {
   custom_models: any[];
 }
 
+type ImportMergeMode = 'merge' | 'replace';
+
+interface ImportStats {
+  conversations: number;
+  messages: number;
+  aiProviders: number;
+  skipped: number;
+  errors: number;
+}
+
+interface ImportPayload {
+  version?: string;
+  conversations?: Partial<Conversation>[];
+  messages?: Partial<Message>[];
+  aiProviders?: Partial<AIProvider>[];
+}
+
 /**
  * 简单的锁管理器，用于防止并发写入冲突
  */
@@ -165,7 +182,7 @@ class DatabaseError extends Error {
   }
 }
 
-class JSONDatabase {
+export class JSONDatabase {
   private dbPath: string;
   private data: DatabaseSchema;
   private lockManager: LockManager;
@@ -173,9 +190,9 @@ class JSONDatabase {
   private cacheTimestamp: number = 0;
   private readonly CACHE_TTL = 1000; // 1秒缓存
 
-  constructor() {
-    // 数据文件存储在项目根目录的data文件夹中
-    this.dbPath = path.join(process.cwd(), 'data', 'database.json');
+  constructor(dbPath = process.env.GEMINI_VIDEO_WEBUI_DB_PATH || path.join(process.cwd(), 'data', 'database.json')) {
+    // 数据文件存储在项目根目录的data文件夹中，可在测试中注入隔离路径
+    this.dbPath = dbPath;
     this.data = {
       users: [],
       ai_providers: [],
@@ -400,6 +417,264 @@ class JSONDatabase {
         );
       }
     });
+  }
+
+  async importUserData(userId: string, importData: ImportPayload, mergeMode: ImportMergeMode = 'replace') {
+    return this.lockManager.withLock(`import-${userId}`, async () => {
+      try {
+        if (!userId) {
+          throw new DatabaseError('User ID is required', 'INVALID_PARAM');
+        }
+
+        const user = this.data.users.find(item => item.id === userId);
+        if (!user) {
+          throw new DatabaseError('User not found', 'NOT_FOUND');
+        }
+
+        const validation = this.validateImportPayload(userId, importData, mergeMode);
+        if (!validation.valid) {
+          throw new DatabaseError(validation.errors.join(', '), 'INVALID_IMPORT');
+        }
+
+        const conversations = importData.conversations || [];
+        const messages = importData.messages || [];
+        const aiProviders = importData.aiProviders || [];
+        const now = new Date().toISOString();
+        const conversationIdMap = new Map<string, string>();
+
+        const stats: ImportStats = {
+          conversations: 0,
+          messages: 0,
+          aiProviders: 0,
+          skipped: 0,
+          errors: 0
+        };
+
+        if (mergeMode === 'replace') {
+          const existingConversationIds = new Set(
+            this.data.conversations
+              .filter(conversation => conversation.user_id === userId)
+              .map(conversation => conversation.id)
+          );
+
+          this.data.messages = this.data.messages.filter(
+            message => !existingConversationIds.has(message.conversation_id)
+          );
+          this.data.conversations = this.data.conversations.filter(
+            conversation => conversation.user_id !== userId
+          );
+          this.data.ai_providers = this.data.ai_providers.filter(
+            provider => provider.user_id !== userId
+          );
+        }
+
+        for (const conversation of conversations) {
+          const oldId = conversation.id!;
+          const newId = mergeMode === 'merge' ? uuidv4() : oldId;
+          conversationIdMap.set(oldId, newId);
+          this.data.conversations.push({
+            id: newId,
+            user_id: userId,
+            title: typeof conversation.title === 'string' ? conversation.title : 'Imported conversation',
+            provider_used: conversation.provider_used,
+            model_used: conversation.model_used,
+            created_at: conversation.created_at || now,
+            updated_at: conversation.updated_at || now
+          });
+          stats.conversations++;
+        }
+
+        for (const message of messages) {
+          const mappedConversationId = conversationIdMap.get(message.conversation_id!) || message.conversation_id!;
+          this.data.messages.push({
+            id: mergeMode === 'merge' ? uuidv4() : message.id!,
+            conversation_id: mappedConversationId,
+            content: message.content!,
+            role: message.role!,
+            provider: message.provider,
+            model: message.model,
+            created_at: message.created_at || now,
+            updated_at: message.updated_at,
+            has_thinking: message.has_thinking,
+            thinking_content: message.thinking_content,
+            thinking_tokens: message.thinking_tokens,
+            reasoning_effort: message.reasoning_effort,
+            thought_signature: message.thought_signature,
+            model_provider: message.model_provider,
+            output_tokens: message.output_tokens
+          });
+          stats.messages++;
+        }
+
+        for (const provider of aiProviders) {
+          this.data.ai_providers.push({
+            id: mergeMode === 'merge' ? uuidv4() : provider.id!,
+            user_id: userId,
+            provider_name: provider.provider_name!,
+            api_key: provider.api_key,
+            base_url: provider.base_url,
+            available_models: Array.isArray(provider.available_models) ? provider.available_models : [],
+            default_model: provider.default_model,
+            is_active: provider.is_active ?? true,
+            created_at: provider.created_at || now,
+            updated_at: provider.updated_at || now
+          });
+          stats.aiProviders++;
+        }
+
+        await this.saveData();
+        return { data: stats, error: null };
+      } catch (error) {
+        console.error('Failed to import user data:', error);
+        return {
+          data: null,
+          error: {
+            message: error instanceof DatabaseError ? error.message : 'Failed to import user data',
+            code: error instanceof DatabaseError ? error.code : 'IMPORT_ERROR'
+          }
+        };
+      }
+    });
+  }
+
+  async clearConversationsByUserId(userId: string): Promise<void> {
+    return this.lockManager.withLock(`clear-${userId}`, async () => {
+      try {
+        if (!userId) {
+          throw new DatabaseError('User ID is required', 'INVALID_PARAM');
+        }
+
+        const conversationIds = new Set(
+          this.data.conversations
+            .filter(conversation => conversation.user_id === userId)
+            .map(conversation => conversation.id)
+        );
+
+        this.data.conversations = this.data.conversations.filter(
+          conversation => conversation.user_id !== userId
+        );
+        this.data.messages = this.data.messages.filter(
+          message => !conversationIds.has(message.conversation_id)
+        );
+        await this.saveData();
+      } catch (error) {
+        throw new DatabaseError(
+          'Failed to clear user conversations',
+          'CLEAR_ERROR',
+          error
+        );
+      }
+    });
+  }
+
+  private validateImportPayload(userId: string, importData: ImportPayload, mergeMode: ImportMergeMode) {
+    const errors: string[] = [];
+    const conversations = importData?.conversations || [];
+    const messages = importData?.messages || [];
+    const aiProviders = importData?.aiProviders || [];
+
+    if (!importData || typeof importData !== 'object' || !importData.version) {
+      errors.push('导入数据格式不正确');
+    }
+    if (!Array.isArray(conversations)) errors.push('conversations must be an array');
+    if (!Array.isArray(messages)) errors.push('messages must be an array');
+    if (!Array.isArray(aiProviders)) errors.push('aiProviders must be an array');
+    if (errors.length > 0) return { valid: false, errors };
+
+    const importedConversationIds = new Set<string>();
+    const ownedConversationIds = new Set(
+      this.data.conversations
+        .filter(conversation => conversation.user_id === userId)
+        .map(conversation => conversation.id)
+    );
+    const otherUserConversationIds = new Set(
+      this.data.conversations
+        .filter(conversation => conversation.user_id !== userId)
+        .map(conversation => conversation.id)
+    );
+
+    for (const conversation of conversations) {
+      if (!conversation || typeof conversation !== 'object' || typeof conversation.id !== 'string' || !conversation.id.trim()) {
+        errors.push('Every imported conversation must include an id');
+        continue;
+      }
+      if (importedConversationIds.has(conversation.id)) {
+        errors.push(`Duplicate imported conversation id: ${conversation.id}`);
+      }
+      if (mergeMode === 'replace' && otherUserConversationIds.has(conversation.id)) {
+        errors.push(`Conversation ${conversation.id} conflicts with another user`);
+      }
+      importedConversationIds.add(conversation.id);
+    }
+
+    const otherUserMessageIds = new Set(
+      this.data.messages
+        .filter(message => otherUserConversationIds.has(message.conversation_id))
+        .map(message => message.id)
+    );
+    const importedMessageIds = new Set<string>();
+
+    for (const message of messages) {
+      if (!message || typeof message !== 'object') {
+        errors.push('Every imported message must be an object');
+        continue;
+      }
+      if (typeof message.id !== 'string' || !message.id.trim()) {
+        errors.push('Every imported message must include an id');
+      } else {
+        if (importedMessageIds.has(message.id)) {
+          errors.push(`Duplicate imported message id: ${message.id}`);
+        }
+        if (mergeMode === 'replace' && otherUserMessageIds.has(message.id)) {
+          errors.push(`Message ${message.id} conflicts with another user`);
+        }
+        importedMessageIds.add(message.id);
+      }
+      if (typeof message.conversation_id !== 'string' || !message.conversation_id.trim()) {
+        errors.push('Every imported message must include a conversation_id');
+      } else if (
+        !importedConversationIds.has(message.conversation_id) &&
+        !(mergeMode === 'merge' && ownedConversationIds.has(message.conversation_id))
+      ) {
+        errors.push(`Message ${message.id || '(unknown)'} references an unknown conversation`);
+      }
+      if (typeof message.content !== 'string') {
+        errors.push(`Message ${message.id || '(unknown)'} must include string content`);
+      }
+      if (!['user', 'assistant', 'system'].includes(String(message.role))) {
+        errors.push(`Message ${message.id || '(unknown)'} has an invalid role`);
+      }
+    }
+
+    const otherUserProviderIds = new Set(
+      this.data.ai_providers
+        .filter(provider => provider.user_id !== userId)
+        .map(provider => provider.id)
+    );
+    const importedProviderIds = new Set<string>();
+
+    for (const provider of aiProviders) {
+      if (!provider || typeof provider !== 'object') {
+        errors.push('Every imported provider must be an object');
+        continue;
+      }
+      if (typeof provider.id !== 'string' || !provider.id.trim()) {
+        errors.push('Every imported provider must include an id');
+      } else {
+        if (importedProviderIds.has(provider.id)) {
+          errors.push(`Duplicate imported provider id: ${provider.id}`);
+        }
+        if (mergeMode === 'replace' && otherUserProviderIds.has(provider.id)) {
+          errors.push(`Provider ${provider.id} conflicts with another user`);
+        }
+        importedProviderIds.add(provider.id);
+      }
+      if (typeof provider.provider_name !== 'string' || !provider.provider_name.trim()) {
+        errors.push('Every imported provider must include provider_name');
+      }
+    }
+
+    return { valid: errors.length === 0, errors };
   }
 
   // ============= 通用查询方法 =============

@@ -84,3 +84,32 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
   req.userId = session.userId;
   next();
 }
+
+export function resolveAuthenticatedUserId(req: Request, requestedUserId?: unknown) {
+  const authenticatedUserId = req.userId;
+
+  if (!authenticatedUserId) {
+    return {
+      ok: false as const,
+      status: 401,
+      error: '未认证用户'
+    };
+  }
+
+  if (
+    typeof requestedUserId === 'string' &&
+    requestedUserId.trim() &&
+    requestedUserId !== authenticatedUserId
+  ) {
+    return {
+      ok: false as const,
+      status: 403,
+      error: '无权访问其他用户的数据'
+    };
+  }
+
+  return {
+    ok: true as const,
+    userId: authenticatedUserId
+  };
+}

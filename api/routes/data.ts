@@ -3,6 +3,7 @@
  */
 import { Router, Request, Response } from 'express';
 import { ensureDatabaseInitialized } from '../services/database-init.js';
+import { resolveAuthenticatedUserId } from '../middleware/auth.js';
 
 const router = Router();
 
@@ -12,15 +13,15 @@ const router = Router();
  */
 router.post('/clear-models', async (req: Request, res: Response): Promise<void> => {
   try {
-    const { userId } = req.body;
-
-    if (!userId) {
-      res.status(400).json({
+    const scopedUser = resolveAuthenticatedUserId(req, req.body.userId);
+    if (!scopedUser.ok) {
+      res.status(scopedUser.status).json({
         success: false,
-        error: '用户ID不能为空'
+        error: scopedUser.error
       });
       return;
     }
+    const userId = scopedUser.userId;
 
     const db = await ensureDatabaseInitialized();
     
@@ -82,15 +83,15 @@ router.post('/clear-models', async (req: Request, res: Response): Promise<void> 
  */
 router.get('/export/:userId', async (req: Request, res: Response): Promise<void> => {
   try {
-    const { userId } = req.params;
-
-    if (!userId) {
-      res.status(400).json({
+    const scopedUser = resolveAuthenticatedUserId(req, req.params.userId);
+    if (!scopedUser.ok) {
+      res.status(scopedUser.status).json({
         success: false,
-        error: '用户ID不能为空'
+        error: scopedUser.error
       });
       return;
     }
+    const userId = scopedUser.userId;
 
     const db = await ensureDatabaseInitialized();
     
@@ -164,21 +165,22 @@ router.get('/export/:userId', async (req: Request, res: Response): Promise<void>
  */
 router.post('/import/:userId', async (req: Request, res: Response): Promise<void> => {
   try {
-    const { userId } = req.params;
+    const scopedUser = resolveAuthenticatedUserId(req, req.params.userId);
     const { data: importData, mergeMode = 'replace' } = req.body as {
       data?: any;
       mergeMode?: 'replace' | 'merge';
     };
 
-    if (!userId) {
-      res.status(400).json({
+    if (!scopedUser.ok) {
+      res.status(scopedUser.status).json({
         success: false,
-        error: '用户ID不能为空'
+        error: scopedUser.error
       });
       return;
     }
+    const userId = scopedUser.userId;
 
-    if (!importData || !importData.version) {
+    if (!importData || !importData.version || !['merge', 'replace'].includes(mergeMode)) {
       res.status(400).json({
         success: false,
         error: '导入数据格式不正确'
@@ -198,99 +200,19 @@ router.post('/import/:userId', async (req: Request, res: Response): Promise<void
       return;
     }
 
-    let importStats = {
-      conversations: 0,
-      messages: 0,
-      aiProviders: 0,
-      skipped: 0,
-      errors: 0
-    };
-
-    // 如果是替换模式，先清除现有数据
-    if (mergeMode === 'replace') {
-      // 删除现有对话和消息
-      const { data: existingConversations } = await db.getConversationsByUserId(userId);
-      if (existingConversations) {
-        for (const conv of existingConversations) {
-          await db.from('conversations').delete().eq('id', conv.id);
-        }
-      }
-      
-      // 删除现有AI提供商配置
-      const { data: existingProviders } = await db.getAIProvidersByUserId(userId);
-      if (existingProviders) {
-        for (const provider of existingProviders) {
-          await db.from('ai_providers').delete().eq('id', provider.id);
-        }
-      }
-    }
-
-    // 导入对话
-    if (importData.conversations) {
-      for (const conv of importData.conversations) {
-        try {
-          const { error } = await db.from('conversations').insert({
-            ...conv,
-            user_id: userId, // 确保用户ID正确
-            id: mergeMode === 'merge' ? undefined : conv.id // merge模式下生成新ID
-          });
-          
-          if (!error) {
-            importStats.conversations++;
-          } else {
-            importStats.errors++;
-          }
-        } catch (error) {
-          importStats.errors++;
-        }
-      }
-    }
-
-    // 导入消息
-    if (importData.messages) {
-      for (const message of importData.messages) {
-        try {
-          const { error } = await db.from('messages').insert({
-            ...message,
-            id: mergeMode === 'merge' ? undefined : message.id // merge模式下生成新ID
-          });
-          
-          if (!error) {
-            importStats.messages++;
-          } else {
-            importStats.errors++;
-          }
-        } catch (error) {
-          importStats.errors++;
-        }
-      }
-    }
-
-    // 导入AI提供商配置
-    if (importData.aiProviders) {
-      for (const provider of importData.aiProviders) {
-        try {
-          const { error } = await db.from('ai_providers').insert({
-            ...provider,
-            user_id: userId, // 确保用户ID正确
-            id: mergeMode === 'merge' ? undefined : provider.id // merge模式下生成新ID
-          });
-          
-          if (!error) {
-            importStats.aiProviders++;
-          } else {
-            importStats.errors++;
-          }
-        } catch (error) {
-          importStats.errors++;
-        }
-      }
+    const importResult = await db.importUserData(userId, importData, mergeMode);
+    if (importResult.error || !importResult.data) {
+      res.status(400).json({
+        success: false,
+        error: importResult.error?.message || '导入数据失败'
+      });
+      return;
     }
 
     res.json({
       success: true,
       message: '数据导入完成',
-      stats: importStats
+      stats: importResult.data
     });
   } catch (error) {
     console.error('Import data error:', error);
@@ -307,7 +229,15 @@ router.post('/import/:userId', async (req: Request, res: Response): Promise<void
  */
 router.get('/preview/:userId', async (req: Request, res: Response): Promise<void> => {
   try {
-    const { userId } = req.params;
+    const scopedUser = resolveAuthenticatedUserId(req, req.params.userId);
+    if (!scopedUser.ok) {
+      res.status(scopedUser.status).json({
+        success: false,
+        error: scopedUser.error
+      });
+      return;
+    }
+    const userId = scopedUser.userId;
 
     const db = await ensureDatabaseInitialized();
     

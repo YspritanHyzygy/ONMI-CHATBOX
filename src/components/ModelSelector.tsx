@@ -1,7 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { ChevronsUpDown, Check } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { getUserId } from '../lib/user';
 import { getValidatedModel, setStorageItem } from '../lib/storage';
 import { fetchWithAuth } from '../lib/fetch';
 import { cn } from '@/lib/utils';
@@ -51,8 +50,7 @@ export default function ModelSelector({ selectedModel, onModelChange, className 
     setError(null);
 
     try {
-      const userId = getUserId();
-      const response = await fetchWithAuth(`/api/providers?userId=${encodeURIComponent(userId)}`);
+      const response = await fetchWithAuth('/api/providers');
       if (!response.ok) {
         throw new Error(t('modelSelector.fetchError'));
       }
