@@ -5,39 +5,24 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { jsonDatabase } from '../json-database';
+import { JSONDatabase } from '../json-database';
 import fs from 'fs/promises';
+import os from 'os';
 import path from 'path';
 
 describe('JSON Database - Concurrent Processing', () => {
-  const testDbPath = path.join(process.cwd(), 'data', 'database.json');
-  const backupPath = `${testDbPath}.test-backup`;
+  let tempDir: string;
+  let jsonDatabase: JSONDatabase;
 
   beforeEach(async () => {
-    // Backup existing database if it exists
-    try {
-      await fs.access(testDbPath);
-      await fs.copyFile(testDbPath, backupPath);
-    } catch {
-      // No existing database
-    }
-    
-    // Initialize fresh database
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'gemini-video-webui-db-'));
+    jsonDatabase = new JSONDatabase(path.join(tempDir, 'database.json'));
     await jsonDatabase.init();
   });
 
   afterEach(async () => {
-    // Restore backup if it exists
-    try {
-      await fs.access(backupPath);
-      await fs.copyFile(backupPath, testDbPath);
-      await fs.unlink(backupPath);
-    } catch {
-      // No backup to restore
-    }
-    
-    // Clear locks
     jsonDatabase.clearLocks();
+    await fs.rm(tempDir, { recursive: true, force: true });
   });
 
   it('should handle concurrent inserts without data loss', async () => {
@@ -145,6 +130,104 @@ describe('JSON Database - Concurrent Processing', () => {
     const page2Ids = page2!.map(m => m.id);
     const overlap = page1Ids.filter(id => page2Ids.includes(id));
     expect(overlap).toHaveLength(0);
+  });
+
+  it('should keep imported merge messages attached to regenerated conversations', async () => {
+    const userId = 'demo-user-001';
+    const result = await jsonDatabase.importUserData(userId, {
+      version: '1.0',
+      conversations: [{
+        id: 'import-conv-001',
+        user_id: 'other-user',
+        title: 'Imported conversation',
+        created_at: '2026-01-01T00:00:00.000Z',
+        updated_at: '2026-01-01T00:00:00.000Z'
+      }],
+      messages: [{
+        id: 'import-msg-001',
+        conversation_id: 'import-conv-001',
+        content: 'hello from import',
+        role: 'user',
+        created_at: '2026-01-01T00:00:00.000Z'
+      }],
+      aiProviders: []
+    }, 'merge');
+
+    expect(result.error).toBeNull();
+    expect(result.data?.conversations).toBe(1);
+    expect(result.data?.messages).toBe(1);
+
+    const { data: conversations } = await jsonDatabase.getConversationsByUserId(userId);
+    const imported = conversations?.find(conversation => conversation.title === 'Imported conversation');
+    expect(imported).toBeTruthy();
+    expect(imported?.id).not.toBe('import-conv-001');
+
+    const { data: messages } = await jsonDatabase.getMessagesByConversationId(imported!.id);
+    expect(messages).toHaveLength(1);
+    expect(messages?.[0].content).toBe('hello from import');
+  });
+
+  it('should reject invalid replace imports before clearing existing data', async () => {
+    const userId = 'demo-user-001';
+    const { data: existing } = await jsonDatabase.from('conversations').insert({
+      user_id: userId,
+      title: 'Keep me'
+    });
+    expect(existing).not.toBeNull();
+
+    const result = await jsonDatabase.importUserData(userId, {
+      version: '1.0',
+      conversations: [],
+      messages: [{
+        id: 'orphan-msg',
+        conversation_id: 'missing-conv',
+        content: 'orphan',
+        role: 'user',
+        created_at: '2026-01-01T00:00:00.000Z'
+      }],
+      aiProviders: []
+    }, 'replace');
+
+    expect(result.error?.code).toBe('INVALID_IMPORT');
+
+    const { data: conversations } = await jsonDatabase.getConversationsByUserId(userId);
+    expect(conversations?.some(conversation => conversation.title === 'Keep me')).toBe(true);
+  });
+
+  it('should reject replace imports that collide with another user conversation id', async () => {
+    const userId = 'demo-user-001';
+    await jsonDatabase.from('users').insert({
+      id: 'other-user-001',
+      username: 'other-user',
+      passwordHash: 'hash'
+    });
+    await jsonDatabase.from('conversations').insert({
+      id: 'shared-conv-id',
+      user_id: 'other-user-001',
+      title: 'Other user conversation'
+    });
+    await jsonDatabase.from('conversations').insert({
+      user_id: userId,
+      title: 'Keep me too'
+    });
+
+    const result = await jsonDatabase.importUserData(userId, {
+      version: '1.0',
+      conversations: [{
+        id: 'shared-conv-id',
+        user_id: userId,
+        title: 'Conflicting import',
+        created_at: '2026-01-01T00:00:00.000Z',
+        updated_at: '2026-01-01T00:00:00.000Z'
+      }],
+      messages: [],
+      aiProviders: []
+    }, 'replace');
+
+    expect(result.error?.code).toBe('INVALID_IMPORT');
+
+    const { data: conversations } = await jsonDatabase.getConversationsByUserId(userId);
+    expect(conversations?.some(conversation => conversation.title === 'Keep me too')).toBe(true);
   });
 
   it('should provide database statistics', () => {

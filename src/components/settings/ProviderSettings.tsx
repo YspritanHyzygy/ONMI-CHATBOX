@@ -12,7 +12,6 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 import { convertModelIdToDisplayName } from '@/lib/model-display-names';
-import { getUserId } from '@/lib/user';
 import { fetchWithAuth } from '@/lib/fetch';
 import type { AIProvider, ProviderConfig } from './types';
 
@@ -175,7 +174,6 @@ export default function ProviderSettings({
                                 message: t('settings.responsesApiTestMessage'),
                                 provider: 'openai',
                                 model: providerConfig.model || 'gpt-4o',
-                                userId: getUserId(),
                                 parameters: {
                                   temperature: 0.7,
                                   maxTokens: 50,

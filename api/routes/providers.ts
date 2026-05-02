@@ -6,6 +6,7 @@ import { Router, type Request, type Response } from 'express';
 import { aiServiceManager } from '../services/ai-service-manager.js';
 import { AIProvider } from '../services/types.js';
 import { ensureDatabaseInitialized } from '../services/database-init.js';
+import { resolveAuthenticatedUserId } from '../middleware/auth.js';
 
 const router = Router();
 
@@ -49,16 +50,15 @@ const SUPPORTED_PROVIDERS = [
  */
 router.get('/', async (req: Request, res: Response): Promise<void> => {
   try {
-    const userId = req.query.userId as string;
-    
-    if (!userId) {
-      // 如果没有用户ID，返回空的提供商列表，因为没有配置就不应该显示任何模型
-      res.json({
-        success: true,
-        data: []
+    const scopedUser = resolveAuthenticatedUserId(req, req.query.userId);
+    if (!scopedUser.ok) {
+      res.status(scopedUser.status).json({
+        success: false,
+        error: scopedUser.error
       });
       return;
     }
+    const userId = scopedUser.userId;
 
     // 获取用户配置的提供商
     const db = await ensureDatabaseInitialized();
@@ -257,15 +257,15 @@ router.get('/supported', async (_req: Request, res: Response): Promise<void> => 
  */
 router.get('/config', async (req: Request, res: Response): Promise<void> => {
   try {
-    const userId = req.query.userId as string;
-    
-    if (!userId) {
-      res.status(400).json({
+    const scopedUser = resolveAuthenticatedUserId(req, req.query.userId);
+    if (!scopedUser.ok) {
+      res.status(scopedUser.status).json({
         success: false,
-        error: '缺少用户ID'
+        error: scopedUser.error
       });
       return;
     }
+    const userId = scopedUser.userId;
 
     const db = await ensureDatabaseInitialized();
     const { data, error } = await db.getAIProvidersByUserId(userId);
@@ -329,7 +329,7 @@ router.get('/config', async (req: Request, res: Response): Promise<void> => {
 router.post('/config', async (req: Request, res: Response): Promise<void> => {
   try {
     const { 
-      userId, 
+      userId: requestedUserId, 
       providerName, 
       apiKey, 
       baseUrl, 
@@ -338,7 +338,17 @@ router.post('/config', async (req: Request, res: Response): Promise<void> => {
       extraConfig = {}
     } = req.body;
     
-    if (!userId || !providerName) {
+    const scopedUser = resolveAuthenticatedUserId(req, requestedUserId);
+    if (!scopedUser.ok) {
+      res.status(scopedUser.status).json({
+        success: false,
+        error: scopedUser.error
+      });
+      return;
+    }
+    const userId = scopedUser.userId;
+
+    if (!providerName) {
       res.status(400).json({
         success: false,
         error: '缺少必要参数'
@@ -433,15 +443,15 @@ router.post('/config', async (req: Request, res: Response): Promise<void> => {
  */
 router.post('/reset', async (req: Request, res: Response): Promise<void> => {
   try {
-    const { userId } = req.body;
-    
-    if (!userId) {
-      res.status(400).json({
+    const scopedUser = resolveAuthenticatedUserId(req, req.body.userId);
+    if (!scopedUser.ok) {
+      res.status(scopedUser.status).json({
         success: false,
-        error: '缺少用户ID'
+        error: scopedUser.error
       });
       return;
     }
+    const userId = scopedUser.userId;
 
     const db = await ensureDatabaseInitialized();
     
@@ -860,12 +870,21 @@ router.post('/models', async (req: Request, res: Response): Promise<void> => {
  */
 router.delete('/config', async (req: Request, res: Response): Promise<void> => {
   try {
-    const { userId, providerName } = req.query as { userId: string; providerName: string };
+    const { userId: requestedUserId, providerName } = req.query as { userId?: string; providerName?: string };
+    const scopedUser = resolveAuthenticatedUserId(req, requestedUserId);
+    if (!scopedUser.ok) {
+      res.status(scopedUser.status).json({
+        success: false,
+        error: scopedUser.error
+      });
+      return;
+    }
+    const userId = scopedUser.userId;
     
-    if (!userId || !providerName) {
+    if (!providerName) {
       res.status(400).json({
         success: false,
-        error: '缺少必要参数：userId 和 providerName'
+        error: '缺少必要参数：providerName'
       });
       return;
     }
@@ -922,9 +941,18 @@ router.delete('/config', async (req: Request, res: Response): Promise<void> => {
  */
 router.put('/default', async (req: Request, res: Response): Promise<void> => {
   try {
-    const { userId, providerName } = req.body;
+    const { userId: requestedUserId, providerName } = req.body;
+    const scopedUser = resolveAuthenticatedUserId(req, requestedUserId);
+    if (!scopedUser.ok) {
+      res.status(scopedUser.status).json({
+        success: false,
+        error: scopedUser.error
+      });
+      return;
+    }
+    const userId = scopedUser.userId;
     
-    if (!userId || !providerName) {
+    if (!providerName) {
       res.status(400).json({
         success: false,
         error: '缺少必要参数'
@@ -963,15 +991,15 @@ router.put('/default', async (req: Request, res: Response): Promise<void> => {
  */
 router.post('/reset-models', async (req: Request, res: Response): Promise<void> => {
   try {
-    const { userId } = req.body;
-    
-    if (!userId) {
-      res.status(400).json({
+    const scopedUser = resolveAuthenticatedUserId(req, req.body.userId);
+    if (!scopedUser.ok) {
+      res.status(scopedUser.status).json({
         success: false,
-        error: '缺少用户ID'
+        error: scopedUser.error
       });
       return;
     }
+    const userId = scopedUser.userId;
 
     const db = await ensureDatabaseInitialized();
     

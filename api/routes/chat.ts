@@ -16,8 +16,21 @@ import {
 import { configManager } from '../services/config-manager.js';
 import { ensureDatabaseInitialized } from '../services/database-init.js';
 import { sanitizeErrorMessage } from '../services/error-utils.js';
+import { resolveAuthenticatedUserId } from '../middleware/auth.js';
 
 const router = Router();
+
+function getConversationAccess(db: any, conversationId: string, userId: string) {
+  const conversations = db.from('conversations').select().data;
+  const conversation = conversations?.find((conv: any) => conv.id === conversationId);
+  if (!conversation) {
+    return { ok: false as const, status: 404, error: '对话不存在' };
+  }
+  if (conversation.user_id !== userId) {
+    return { ok: false as const, status: 403, error: '无权访问其他用户的数据' };
+  }
+  return { ok: true as const, conversation };
+}
 
 /**
  * 获取用户的对话列表
@@ -25,15 +38,15 @@ const router = Router();
  */
 router.get('/conversations', async (req: Request, res: Response): Promise<void> => {
   try {
-    const userId = req.query['userId'] as string | undefined;
-
-    if (!userId) {
-      res.status(400).json({
+    const scopedUser = resolveAuthenticatedUserId(req, req.query['userId']);
+    if (!scopedUser.ok) {
+      res.status(scopedUser.status).json({
         success: false,
-        error: '缺少用户ID'
+        error: scopedUser.error
       });
       return;
     }
+    const userId = scopedUser.userId;
 
     const db = await ensureDatabaseInitialized();
     const { data, error } = await db.getConversationsByUserId(userId);
@@ -77,10 +90,38 @@ router.post('/conversations', async (req: Request, res: Response): Promise<void>
       return;
     }
 
-    const { userId, title = '新对话' } = validation.data!;
+    const { id, userId: requestedUserId, title = '新对话' } = validation.data!;
+    const scopedUser = resolveAuthenticatedUserId(req, requestedUserId);
+    if (!scopedUser.ok) {
+      res.status(scopedUser.status).json({
+        success: false,
+        error: scopedUser.error
+      });
+      return;
+    }
+    const userId = scopedUser.userId;
 
     const db = await ensureDatabaseInitialized();
+    if (id) {
+      const existing = getConversationAccess(db, id, userId);
+      if (existing.ok) {
+        res.json({
+          success: true,
+          conversation: existing.conversation
+        });
+        return;
+      }
+      if (existing.status === 403) {
+        res.status(existing.status).json({
+          success: false,
+          error: existing.error
+        });
+        return;
+      }
+    }
+
     const result = await db.from('conversations').insert({
+      ...(id ? { id } : {}),
       user_id: userId,
       title
     });
@@ -115,8 +156,25 @@ router.post('/conversations', async (req: Request, res: Response): Promise<void>
 router.get('/conversations/:conversationId/messages', async (req: Request, res: Response): Promise<void> => {
   try {
     const { conversationId } = req.params;
+    const scopedUser = resolveAuthenticatedUserId(req);
+    if (!scopedUser.ok) {
+      res.status(scopedUser.status).json({
+        success: false,
+        error: scopedUser.error
+      });
+      return;
+    }
 
     const db = await ensureDatabaseInitialized();
+    const access = getConversationAccess(db, conversationId, scopedUser.userId);
+    if (!access.ok) {
+      res.status(access.status).json({
+        success: false,
+        error: access.error
+      });
+      return;
+    }
+
     const { data, error } = await db.getMessagesByConversationId(conversationId);
 
     if (error) {
@@ -168,15 +226,25 @@ router.post('/conversations/:conversationId/messages', async (req: Request, res:
       return;
     }
 
-    if (!userId) {
-      res.status(400).json({
+    const scopedUser = resolveAuthenticatedUserId(req, userId);
+    if (!scopedUser.ok) {
+      res.status(scopedUser.status).json({
         success: false,
-        error: '缺少用户ID'
+        error: scopedUser.error
       });
       return;
     }
+    const scopedUserId = scopedUser.userId;
 
     const db = await ensureDatabaseInitialized();
+    const access = getConversationAccess(db, conversationId, scopedUserId);
+    if (!access.ok) {
+      res.status(access.status).json({
+        success: false,
+        error: access.error
+      });
+      return;
+    }
 
     // 使用配置管理器查找配置
     if (!isAIProvider(provider)) {
@@ -187,7 +255,7 @@ router.post('/conversations/:conversationId/messages', async (req: Request, res:
       return;
     }
 
-    const configLookup = await configManager.findUserConfig(userId, provider);
+    const configLookup = await configManager.findUserConfig(scopedUserId, provider);
 
     if (!configLookup.found || !configLookup.config) {
       const errorMsg = configManager.getConfigErrorMessage(provider, configLookup);
@@ -431,8 +499,25 @@ router.post('/conversations/:conversationId/messages', async (req: Request, res:
 router.delete('/conversations/:conversationId', async (req: Request, res: Response): Promise<void> => {
   try {
     const { conversationId } = req.params;
+    const scopedUser = resolveAuthenticatedUserId(req);
+    if (!scopedUser.ok) {
+      res.status(scopedUser.status).json({
+        success: false,
+        error: scopedUser.error
+      });
+      return;
+    }
 
     const db = await ensureDatabaseInitialized();
+    const access = getConversationAccess(db, conversationId, scopedUser.userId);
+    if (!access.ok) {
+      res.status(access.status).json({
+        success: false,
+        error: access.error
+      });
+      return;
+    }
+
     const { error } = await db.from('conversations').delete().eq('id', conversationId);
 
     if (error) {
@@ -459,10 +544,19 @@ router.delete('/conversations/:conversationId', async (req: Request, res: Respon
  * 清理所有对话数据 - 用于开发测试
  * DELETE /api/chat/conversations
  */
-router.delete('/conversations', async (_req: Request, res: Response): Promise<void> => {
+router.delete('/conversations', async (req: Request, res: Response): Promise<void> => {
   try {
+    const scopedUser = resolveAuthenticatedUserId(req);
+    if (!scopedUser.ok) {
+      res.status(scopedUser.status).json({
+        success: false,
+        error: scopedUser.error
+      });
+      return;
+    }
+
     const db = await ensureDatabaseInitialized();
-    await (db as any).clearAllConversations();
+    await db.clearConversationsByUserId(scopedUser.userId);
 
     res.json({
       success: true,
@@ -496,7 +590,16 @@ router.post('/', async (req: Request, res: Response): Promise<void> => {
       return;
     }
 
-    const { message, provider, model, conversationId, userId, parameters } = requestValidation.data!;
+    const { message, provider, model, conversationId, parameters } = requestValidation.data!;
+    const scopedUser = resolveAuthenticatedUserId(req, (req.body as { userId?: unknown }).userId);
+    if (!scopedUser.ok) {
+      res.status(scopedUser.status).json({
+        success: false,
+        error: scopedUser.error
+      });
+      return;
+    }
+    const userId = scopedUser.userId;
 
     // 检查是否使用 Responses API - 统一逻辑
     const useResponsesAPI = parameters?.useResponsesAPI === true;
@@ -513,12 +616,8 @@ router.post('/', async (req: Request, res: Response): Promise<void> => {
 
     // 如果没有提供conversationId，创建新对话
     if (!targetConversationId) {
-      const demoUserId = 'demo-user-001';
-
-      console.log(`[DEBUG] 使用演示用户ID: ${demoUserId} 代替前端用户ID: ${userId}`);
-
       const { data: newConversation, error: createError } = await db.from('conversations').insert({
-        user_id: demoUserId,
+        user_id: userId,
         title: message.slice(0, 30) + (message.length > 30 ? '...' : '')
       });
 
@@ -532,6 +631,31 @@ router.post('/', async (req: Request, res: Response): Promise<void> => {
       }
 
       targetConversationId = newConversation.id;
+    } else {
+      const access = getConversationAccess(db, targetConversationId, userId);
+      if (!access.ok) {
+        if (access.status === 404) {
+          const { error: createMissingError } = await db.from('conversations').insert({
+            id: targetConversationId,
+            user_id: userId,
+            title: message.slice(0, 30) + (message.length > 30 ? '...' : '')
+          });
+
+          if (createMissingError) {
+            res.status(500).json({
+              success: false,
+              error: `创建对话失败: ${(createMissingError as any)?.message || '未知错误'}`
+            });
+            return;
+          }
+        } else {
+          res.status(access.status).json({
+            success: false,
+            error: access.error
+          });
+          return;
+        }
+      }
     }
 
     // 确保targetConversationId不为undefined
@@ -542,9 +666,6 @@ router.post('/', async (req: Request, res: Response): Promise<void> => {
       });
       return;
     }
-
-    // 使用配置管理器查找配置
-    const actualUserId = targetConversationId ? userId : 'demo-user-001';
 
     console.log(`[DEBUG] Provider from frontend: "${provider}"`);
     console.log(`[DEBUG] Model from frontend: "${model}"`);
@@ -560,7 +681,7 @@ router.post('/', async (req: Request, res: Response): Promise<void> => {
     }
 
     // 查找用户配置
-    const configLookup = await configManager.findUserConfig(actualUserId, provider);
+    const configLookup = await configManager.findUserConfig(userId, provider);
 
     if (!configLookup.found || !configLookup.config) {
       const errorMsg = configManager.getConfigErrorMessage(provider, configLookup);

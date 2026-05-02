@@ -5,8 +5,8 @@ import OnmiTopBar from '@/components/onmi/OnmiTopBar';
 import { OnmiPageShell, OnmiStaticSidebar } from '@/components/onmi/OnmiShell';
 import { OnmiRule } from '@/components/onmi/OnmiPrimitives';
 import { useOnmiCopy } from '@/components/onmi/useOnmiCopy';
+import { useResponsiveSidebar } from '@/hooks/useResponsiveSidebar';
 import { fetchWithAuth } from '@/lib/fetch';
-import { getUserId } from '@/lib/user';
 import useAuthStore from '@/store/authStore';
 
 interface DataPreview {
@@ -27,21 +27,22 @@ type MergeMode = 'merge' | 'replace';
 export default function DataPage() {
   const copy = useOnmiCopy();
   const user = useAuthStore((state) => state.user);
-  const [showSidebar, setShowSidebar] = useState(() => {
-    if (typeof window === 'undefined') return true;
-    return window.innerWidth >= 900;
-  });
+  const { showSidebar, setShowSidebar } = useResponsiveSidebar();
   const [preview, setPreview] = useState<DataPreview | null>(null);
   const [mergeMode, setMergeMode] = useState<MergeMode>('merge');
   const [isExporting, setIsExporting] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  const userId = user?.id || getUserId();
+  const userId = user?.id;
 
   useEffect(() => {
     let cancelled = false;
     async function loadPreview() {
+      if (!userId) {
+        setPreview(null);
+        return;
+      }
       try {
         const response = await fetchWithAuth(`/api/data/preview/${userId}`);
         const result = await response.json();
@@ -59,6 +60,10 @@ export default function DataPage() {
   }, [userId]);
 
   const handleExport = async () => {
+    if (!userId) {
+      toast.error(copy('请先登录', 'Please sign in first'));
+      return;
+    }
     setIsExporting(true);
     try {
       const response = await fetchWithAuth(`/api/data/export/${userId}`);
@@ -87,6 +92,10 @@ export default function DataPage() {
   const handleFileSelect = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
+    if (!userId) {
+      toast.error(copy('请先登录', 'Please sign in first'));
+      return;
+    }
     setIsImporting(true);
     try {
       const fileContent = await file.text();

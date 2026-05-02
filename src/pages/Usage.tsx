@@ -6,8 +6,8 @@ import { OnmiPageShell, OnmiStaticSidebar } from '@/components/onmi/OnmiShell';
 import { OnmiRule, ProviderGlyph } from '@/components/onmi/OnmiPrimitives';
 import { getProviderName } from '@/components/onmi/providerMeta';
 import { useOnmiCopy } from '@/components/onmi/useOnmiCopy';
+import { useResponsiveSidebar } from '@/hooks/useResponsiveSidebar';
 import { fetchWithAuth } from '@/lib/fetch';
-import { getUserId } from '@/lib/user';
 import useAuthStore from '@/store/authStore';
 
 interface UsageStats {
@@ -38,17 +38,19 @@ const PROVIDER_ROWS = [
 export default function UsagePage() {
   const copy = useOnmiCopy();
   const user = useAuthStore((state) => state.user);
-  const [showSidebar, setShowSidebar] = useState(() => {
-    if (typeof window === 'undefined') return true;
-    return window.innerWidth >= 900;
-  });
+  const { showSidebar, setShowSidebar } = useResponsiveSidebar();
   const [usage, setUsage] = useState<UsageStats | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const userId = user?.id || getUserId();
+  const userId = user?.id;
 
   useEffect(() => {
     let cancelled = false;
     async function loadUsage() {
+      if (!userId) {
+        setUsage(null);
+        setIsLoading(false);
+        return;
+      }
       try {
         setIsLoading(true);
         const response = await fetchWithAuth(`/api/business/usage/${userId}`);
@@ -73,6 +75,7 @@ export default function UsagePage() {
     value: 0.2 + Math.abs(Math.sin(index * 0.6) * 0.6) + (index > 22 ? 0.5 : 0) + (index % 7 < 2 ? -0.15 : 0.1),
     provider: PROVIDER_ROWS[index % PROVIDER_ROWS.length].id,
   })), []);
+  const axisLabels = useMemo(() => buildAxisLabels(), []);
   const max = Math.max(...days.map((day) => day.value));
   const monthlyLimit = usage?.limits.monthlyRequests ?? 1000;
   const dailyLimit = usage?.limits.dailyRequests ?? 100;
@@ -139,11 +142,9 @@ export default function UsagePage() {
             ))}
           </div>
           <div className="onmi-axis onmi-mono">
-            <span>MAR 29</span>
-            <span>APR 05</span>
-            <span>APR 12</span>
-            <span>APR 19</span>
-            <span>APR 28 · today</span>
+            {axisLabels.map((label) => (
+              <span key={label}>{label}</span>
+            ))}
           </div>
         </section>
 
@@ -186,4 +187,14 @@ function formatWindow() {
   const start = new Date(end);
   start.setDate(end.getDate() - 30);
   return `${start.toISOString().slice(0, 10)} -> ${end.toISOString().slice(0, 10)}`;
+}
+
+function buildAxisLabels() {
+  const formatter = new Intl.DateTimeFormat(undefined, { month: 'short', day: '2-digit' });
+  return [29, 22, 15, 8, 0].map((daysAgo, index) => {
+    const date = new Date();
+    date.setDate(date.getDate() - daysAgo);
+    const label = formatter.format(date).toUpperCase();
+    return index === 4 ? `${label} · today` : label;
+  });
 }

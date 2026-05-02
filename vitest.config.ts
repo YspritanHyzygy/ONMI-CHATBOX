@@ -6,13 +6,17 @@ export default defineConfig({
     globals: true,
     environment: 'node',
     include: ['**/*.test.ts', '**/*.spec.ts'],
-    exclude: ['node_modules', 'dist', 'build'],
+    exclude: ['node_modules/**', 'dist/**', 'build/**', '.claude/**', 'coverage/**', 'data/**'],
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json', 'html'],
       exclude: [
         'node_modules/',
         'dist/',
+        'build/',
+        '.claude/',
+        'coverage/',
+        'data/',
         '**/*.test.ts',
         '**/*.spec.ts',
         '**/*.config.ts',

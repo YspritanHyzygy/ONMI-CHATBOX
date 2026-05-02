@@ -236,6 +236,7 @@ export function validateProviderConfigRequest(body: unknown): {
  * Validate conversation creation request
  */
 export interface ValidatedConversationRequest {
+  id?: string;
   userId: string;
   title?: string;
 }
@@ -256,6 +257,7 @@ export function validateConversationRequest(body: unknown): {
   }
 
   const title = hasStringProperty(body, 'title') ? body.title : undefined;
+  const id = hasStringProperty(body, 'id') ? body.id : undefined;
 
   if (errors.length > 0) {
     return { valid: false, errors };
@@ -264,6 +266,7 @@ export function validateConversationRequest(body: unknown): {
   return {
     valid: true,
     data: {
+      id,
       userId: (body as { userId: string }).userId,
       title
     },

@@ -1,6 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { getUserId } from '../lib/user';
 import { setStorageItem, getStorageItem } from '../lib/storage';
 import { fetchWithAuth } from '../lib/fetch';
 import ProviderSettings from '../components/settings/ProviderSettings';
@@ -13,6 +12,7 @@ import { OnmiPageShell, OnmiStaticSidebar } from '@/components/onmi/OnmiShell';
 import { OnmiRule, ProviderGlyph, StatusDot } from '@/components/onmi/OnmiPrimitives';
 import { PROVIDER_ORDER, getProviderName } from '@/components/onmi/providerMeta';
 import { useOnmiCopy } from '@/components/onmi/useOnmiCopy';
+import { useResponsiveSidebar } from '@/hooks/useResponsiveSidebar';
 import { cn } from '@/lib/utils';
 
 export default function Settings() {
@@ -21,10 +21,7 @@ export default function Settings() {
   const [providers, setProviders] = useState<AIProvider[]>([]);
   const [configs, setConfigs] = useState<ProviderConfig[]>([]);
   const [activeTab, setActiveTabState] = useState<string>('');
-  const [showSidebar, setShowSidebar] = useState(() => {
-    if (typeof window === 'undefined') return true;
-    return window.innerWidth >= 900;
-  });
+  const { showSidebar, setShowSidebar } = useResponsiveSidebar();
 
   const setActiveTab = (tab: string) => {
     setActiveTabState(tab);
@@ -218,8 +215,7 @@ export default function Settings() {
 
   const loadConfigs = async () => {
     try {
-      const userId = getUserId();
-      const response = await fetchWithAuth(`/api/providers/config?userId=${encodeURIComponent(userId)}`);
+      const response = await fetchWithAuth('/api/providers/config');
       if (response.ok) {
         const result = await response.json();
         if (result.success && result.data) {
@@ -352,11 +348,10 @@ export default function Settings() {
         return;
       }
 
-      const userId = getUserId();
       const response = await fetchWithAuth('/api/providers/config', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId, providerName: providerId, apiKey: config.config.api_key, baseUrl: config.config.base_url, availableModels: config.models || modelFetchResults[providerId]?.models || [], defaultModel: config.model, extraConfig: config.config }),
+        body: JSON.stringify({ providerName: providerId, apiKey: config.config.api_key, baseUrl: config.config.base_url, availableModels: config.models || modelFetchResults[providerId]?.models || [], defaultModel: config.model, extraConfig: config.config }),
       });
       // 非 2xx 响应（401/403/500 等）也要解析错误信息，否则用户只看到"保存失败"不知道原因
       const result = await response.json().catch(() => ({ success: false, error: `HTTP ${response.status}` }));
@@ -584,8 +579,7 @@ export default function Settings() {
             // 同样走 ref 避免 setTimeout 闭包过期
             const updatedConfig = configsRef.current.find(c => c.provider === providerId);
             if (updatedConfig) {
-              const userId = getUserId();
-              const resp = await fetchWithAuth('/api/providers/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId, providerName: providerId, apiKey: updatedConfig.config.api_key, baseUrl: updatedConfig.config.base_url, availableModels: allModelsForSaving, defaultModel }) });
+              const resp = await fetchWithAuth('/api/providers/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ providerName: providerId, apiKey: updatedConfig.config.api_key, baseUrl: updatedConfig.config.base_url, availableModels: allModelsForSaving, defaultModel }) });
               if (resp.ok) {
                 window.dispatchEvent(new Event('modelsUpdated'));
                 await loadConfigs();
@@ -613,9 +607,7 @@ export default function Settings() {
     setShowResetLoading(true);
     setResetStatus({ status: 'loading', message: t('settings.resettingModels') });
     try {
-      const userId = getUserId();
-      if (!userId) { setShowResetLoading(false); setResetStatus({ status: 'error', message: t('auth.pleaseLogin') }); return; }
-      const response = await fetchWithAuth('/api/data/clear-models', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId }) });
+      const response = await fetchWithAuth('/api/data/clear-models', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) });
       if (response.ok) {
         const result = await response.json();
         if (result.success) {
