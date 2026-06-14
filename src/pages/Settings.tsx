@@ -703,7 +703,6 @@ export default function Settings() {
           provider={activeProvider?.id || 'openai'}
           modelLabel={activeProvider ? getProviderName(activeProvider.id) : copy('设置', 'Settings')}
           status="API · CONFIG"
-          onCommand={() => window.alert(copy('命令面板是占位功能。', 'Command palette is a placeholder.'))}
         />
       }
       sidebar={<OnmiStaticSidebar activeId="settings" />}

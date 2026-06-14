@@ -1243,6 +1243,52 @@
   min-width: 0;
 }
 
+.onmi-template-picker {
+  position: relative;
+  flex: none;
+}
+
+.onmi-template-menu {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 8px);
+  width: min(300px, calc(100vw - 40px));
+  display: grid;
+  gap: 4px;
+  padding: 8px;
+  border: 1px solid var(--line-2);
+  border-radius: 10px;
+  background: var(--bg-1);
+  box-shadow: 0 16px 40px rgba(0,0,0,0.36);
+  z-index: 20;
+}
+
+.onmi-template-menu button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 7px 9px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--fg-1);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.onmi-template-menu button:hover {
+  background: var(--bg-3);
+  color: var(--fg-0);
+}
+
+.onmi-composer-toolbar .onmi-btn.primary.stop {
+  background: var(--err);
+  border-color: var(--err);
+  color: white;
+}
+
 .onmi .onmi-composer-params-trigger {
   height: 28px;
 }

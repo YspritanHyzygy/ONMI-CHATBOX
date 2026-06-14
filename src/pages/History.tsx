@@ -47,10 +47,10 @@ export default function History() {
   const loadConversations = async () => {
     try {
       setIsLoading(true);
-      const response = await fetchWithAuth('/api/conversations');
+      const response = await fetchWithAuth('/api/chat/conversations');
       if (response.ok) {
         const data = await response.json();
-        setConversations(data.conversations || []);
+        setConversations(data.conversations || data.data || []);
       } else {
         setConversations([]);
       }
@@ -63,7 +63,7 @@ export default function History() {
 
   const filteredConversations = conversations.filter(conv =>
     conv.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    conv.preview.toLowerCase().includes(searchQuery.toLowerCase())
+    (conv.preview || '').toLowerCase().includes(searchQuery.toLowerCase())
   );
 
   const handleSelectConversation = (id: string) => {
@@ -75,12 +75,12 @@ export default function History() {
   const handleDeleteSelected = async () => {
     if (selectedConversations.length === 0) return;
     try {
-      const response = await fetchWithAuth('/api/conversations/batch-delete', {
-        method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ conversationIds: selectedConversations }),
-      });
-      if (response.ok) {
+      const results = await Promise.all(
+        selectedConversations.map((conversationId) =>
+          fetchWithAuth(`/api/chat/conversations/${conversationId}`, { method: 'DELETE' })
+        )
+      );
+      if (results.every((response) => response.ok)) {
         setConversations(prev => prev.filter(conv => !selectedConversations.includes(conv.id)));
         setSelectedConversations([]);
         toast.success(t('history.deleteSuccess', { defaultValue: 'Conversations deleted' }));
@@ -94,7 +94,7 @@ export default function History() {
 
   const handleDeleteSingle = async (conversationId: string) => {
     try {
-      const response = await fetchWithAuth(`/api/conversations/${conversationId}`, { method: 'DELETE' });
+      const response = await fetchWithAuth(`/api/chat/conversations/${conversationId}`, { method: 'DELETE' });
       if (response.ok) {
         setConversations(prev => prev.filter(conv => conv.id !== conversationId));
         setSelectedConversations(prev => prev.filter(id => id !== conversationId));
@@ -246,7 +246,7 @@ export default function History() {
                           {conversation.title}
                         </h3>
                         <p className="mt-1 text-sm text-muted-foreground line-clamp-2">
-                          {conversation.preview}
+                          {conversation.preview || t('history.noPreview', { defaultValue: 'No preview available' })}
                         </p>
                         <div className="mt-2 flex items-center gap-3 text-xs text-muted-foreground">
                           <span className="flex items-center gap-1">

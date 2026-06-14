@@ -32,6 +32,21 @@ function getConversationAccess(db: any, conversationId: string, userId: string) 
   return { ok: true as const, conversation };
 }
 
+async function withConversationSummaries(db: any, conversations: any[]) {
+  return Promise.all(conversations.map(async (conversation) => {
+    const { data: messages } = await db.getMessagesByConversationId(conversation.id);
+    const safeMessages = Array.isArray(messages) ? messages : [];
+    const lastMessage = safeMessages[safeMessages.length - 1];
+    return {
+      ...conversation,
+      preview: lastMessage?.content || '',
+      message_count: safeMessages.length,
+      provider_used: conversation.provider_used || lastMessage?.provider,
+      model_used: conversation.model_used || lastMessage?.model,
+    };
+  }));
+}
+
 /**
  * 获取用户的对话列表
  * GET /api/chat/conversations
@@ -55,21 +70,26 @@ router.get('/conversations', async (req: Request, res: Response): Promise<void> 
       console.error('JSON database conversations query error:', error);
       res.json({
         success: true,
-        data: []
+        data: [],
+        conversations: []
       });
       return;
     }
 
+    const conversations = await withConversationSummaries(db, data || []);
+
     res.json({
       success: true,
-      data: data || []
+      data: conversations,
+      conversations
     });
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : '未知错误';
     console.error('Chat conversations route error:', errorMessage);
     res.json({
       success: true,
-      data: []
+      data: [],
+      conversations: []
     });
   }
 });
@@ -193,6 +213,56 @@ router.get('/conversations/:conversationId/messages', async (req: Request, res: 
     res.status(500).json({
       success: false,
       error: '服务器内部错误'
+    });
+  }
+});
+
+/**
+ * Duplicate a conversation and all of its messages for the authenticated user.
+ * POST /api/chat/conversations/:conversationId/fork
+ */
+router.post('/conversations/:conversationId/fork', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { conversationId } = req.params;
+    const scopedUser = resolveAuthenticatedUserId(req);
+    if (!scopedUser.ok) {
+      res.status(scopedUser.status).json({
+        success: false,
+        error: scopedUser.error
+      });
+      return;
+    }
+
+    const db = await ensureDatabaseInitialized();
+    const access = getConversationAccess(db, conversationId, scopedUser.userId);
+    if (!access.ok) {
+      res.status(access.status).json({
+        success: false,
+        error: access.error
+      });
+      return;
+    }
+
+    const { data, error } = await db.forkConversationForUser(scopedUser.userId, conversationId);
+    if (error || !data) {
+      res.status(error?.code === 'NOT_FOUND' ? 404 : 500).json({
+        success: false,
+        error: error?.message || 'Failed to fork conversation'
+      });
+      return;
+    }
+
+    res.json({
+      success: true,
+      data,
+      conversation: data.conversation,
+      messages: data.messages
+    });
+  } catch (error) {
+    console.error('Fork conversation error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Server internal error'
     });
   }
 });
@@ -518,7 +588,7 @@ router.delete('/conversations/:conversationId', async (req: Request, res: Respon
       return;
     }
 
-    const { error } = await db.from('conversations').delete().eq('id', conversationId);
+    const { error } = await db.deleteConversationById(conversationId);
 
     if (error) {
       res.status(500).json({

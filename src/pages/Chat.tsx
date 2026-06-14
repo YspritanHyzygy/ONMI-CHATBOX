@@ -13,6 +13,7 @@ import {
   Send,
   SlidersHorizontal,
   Sparkles,
+  Square,
   Trash2,
   Wand2,
 } from 'lucide-react';
@@ -30,6 +31,25 @@ import { useOnmiCopy } from '@/components/onmi/useOnmiCopy';
 import { cn } from '@/lib/utils';
 import { useResponsiveSidebar } from '@/hooks/useResponsiveSidebar';
 import useAuthStore from '@/store/authStore';
+
+const PROMPT_TEMPLATES = [
+  {
+    label: 'Debug a failure',
+    text: 'Please debug this failure. Start with the likely root cause, then give a minimal fix and a verification checklist:\n\n',
+  },
+  {
+    label: 'Review code',
+    text: 'Please review this code for correctness, regressions, security issues, and missing tests. Lead with findings:\n\n',
+  },
+  {
+    label: 'Plan implementation',
+    text: 'Turn this request into an implementation plan with success criteria, edge cases, and a focused test plan:\n\n',
+  },
+  {
+    label: 'Summarize session',
+    text: 'Summarize the current session into decisions, open questions, and next actions.',
+  },
+];
 
 function useCopy() {
   return useOnmiCopy();
@@ -66,6 +86,28 @@ export default function Chat() {
     localStorage.setItem('onmi-message-style', next);
   };
 
+  const handleExportCurrent = () => {
+    if (!chat.currentConversation || chat.currentConversation.messages.length === 0) {
+      toast.error(t('没有可导出的会话', 'No session to export.'));
+      return;
+    }
+
+    downloadTextFile(
+      `${sanitizeFilename(chat.currentConversation.title || 'onmi-session')}.md`,
+      buildTranscriptMarkdown(chat.currentConversation)
+    );
+    toast.success(t('会话已导出', 'Session exported'));
+  };
+
+  const handleForkCurrent = async () => {
+    try {
+      const forked = await chat.forkCurrentConversation();
+      toast.success(`${t('会话已分叉', 'Session forked')}: ${forked.title}`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : t('会话分叉失败', 'Session fork failed'));
+    }
+  };
+
   return (
     <OnmiPageShell
       sidebarOpen={showSidebar}
@@ -77,7 +119,8 @@ export default function Chat() {
           status={isStreaming ? 'STREAMING' : 'CONNECTED'}
           settingsHref="/settings"
           accountLabel={t('设置', 'Settings')}
-          onCommand={() => toast.info(t('命令面板是占位功能，后续会接入搜索与快捷操作。', 'Command palette is a placeholder for search and quick actions.'))}
+          commandLabel={t('提示词模板', 'Templates')}
+          onCommand={() => chat.setInputMessage(PROMPT_TEMPLATES[0].text)}
           controls={
             <div className="onmi-top-controls">
               <ModelSelector
@@ -108,6 +151,8 @@ export default function Chat() {
           isStreaming={isStreaming}
           messageStyle={messageStyle}
           onToggleMessageStyle={toggleMessageStyle}
+          onExportCurrent={handleExportCurrent}
+          onForkCurrent={handleForkCurrent}
         />
 
         <div className="onmi-transcript onmi-scroll">
@@ -131,6 +176,8 @@ export default function Chat() {
           temperature={chat.aiParameters.temperature}
           selectedModel={chat.selectedModel}
           onParametersChange={chat.setAiParameters}
+          onStop={chat.stopGeneration}
+          onTemplateSelect={chat.setInputMessage}
         />
       </div>
     </OnmiPageShell>
@@ -256,6 +303,8 @@ interface ChatSessionHeaderProps {
   isStreaming: boolean;
   messageStyle: 'doc' | 'bubble';
   onToggleMessageStyle: () => void;
+  onExportCurrent: () => void;
+  onForkCurrent: () => void;
 }
 
 function ChatSessionHeader({
@@ -265,6 +314,8 @@ function ChatSessionHeader({
   isStreaming,
   messageStyle,
   onToggleMessageStyle,
+  onExportCurrent,
+  onForkCurrent,
 }: ChatSessionHeaderProps) {
   const t = useCopy();
   const messageCount = conversation?.messages.length || 0;
@@ -289,10 +340,10 @@ function ChatSessionHeader({
           <SlidersHorizontal size={12} />
           {messageStyle === 'doc' ? t('文档流', 'Document') : t('气泡', 'Bubble')}
         </button>
-        <button type="button" className="onmi-btn ghost" onClick={() => toast.info(t('导出当前会话是占位功能。', 'Current-session export is a placeholder.'))}>
+        <button type="button" className="onmi-btn ghost" onClick={onExportCurrent} disabled={!conversation || messageCount === 0} title={t('导出当前会话', 'Export current session')}>
           <Download size={12} />
         </button>
-        <button type="button" className="onmi-btn ghost" onClick={() => toast.info(t('会话分叉是占位功能。', 'Session fork is a placeholder.'))}>
+        <button type="button" className="onmi-btn ghost" onClick={onForkCurrent} disabled={!conversation} title={t('分叉当前会话', 'Fork current session')}>
           <RefreshCw size={12} />
         </button>
       </div>
@@ -430,10 +481,6 @@ function OnmiMessage({ message, index, conversation, useResponsesAPI, initials, 
               <Copy size={11} />
               {t('复制', 'Copy')}
             </button>
-            <button type="button" className="onmi-btn ghost" onClick={() => toast.info(t('重生成是占位功能。', 'Retry is a placeholder.'))}>
-              <RefreshCw size={11} />
-              {t('重生成', 'Retry')}
-            </button>
           </div>
         )}
       </div>
@@ -452,6 +499,8 @@ interface ChatComposerProps {
   temperature: number;
   selectedModel: AIParametersPanelProps['selectedModel'];
   onParametersChange: AIParametersPanelProps['onParametersChange'];
+  onStop: () => void;
+  onTemplateSelect: (message: string) => void;
 }
 
 function ChatComposer({
@@ -465,8 +514,11 @@ function ChatComposer({
   temperature,
   selectedModel,
   onParametersChange,
+  onStop,
+  onTemplateSelect,
 }: ChatComposerProps) {
   const t = useCopy();
+  const [showTemplates, setShowTemplates] = useState(false);
   const isDisabled = !inputMessage.trim() || isLoading || (currentConversation?.messages.some((message) => message.isTyping) ?? false);
 
   return (
@@ -481,24 +533,34 @@ function ChatComposer({
         className="onmi-composer-input onmi-scroll"
       />
       <div className="onmi-composer-toolbar">
-        <button
-          type="button"
-          className="onmi-btn ghost onmi-tool-button"
-          title={t('附件', 'Attach')}
-          onClick={() => toast.info(t('附件功能暂未接入。', 'Attachments are not wired yet.'))}
-        >
-          <Plus size={12} />
-          <span className="onmi-toolbar-label">{t('附件', 'Attach')}</span>
-        </button>
-        <button
-          type="button"
-          className="onmi-btn ghost onmi-tool-button"
-          title={t('工具', 'Tools')}
-          onClick={() => toast.info(t('工具调用面板是占位功能。', 'Tools panel is a placeholder.'))}
-        >
-          <Wand2 size={12} />
-          <span className="onmi-toolbar-label">{t('工具', 'Tools')}</span>
-        </button>
+        <div className="onmi-template-picker">
+          <button
+            type="button"
+            className="onmi-btn ghost onmi-tool-button"
+            title={t('提示词模板', 'Prompt templates')}
+            onClick={() => setShowTemplates((open) => !open)}
+          >
+            <Wand2 size={12} />
+            <span className="onmi-toolbar-label">{t('模板', 'Templates')}</span>
+          </button>
+          {showTemplates && (
+            <div className="onmi-template-menu">
+              {PROMPT_TEMPLATES.map((template) => (
+                <button
+                  key={template.label}
+                  type="button"
+                  onClick={() => {
+                    onTemplateSelect(template.text);
+                    setShowTemplates(false);
+                  }}
+                >
+                  <Sparkles size={12} />
+                  <span>{template.label}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
         <div className="onmi-composer-param-control" title={t('参数', 'Params')}>
           <AIParametersPanel
             onParametersChange={onParametersChange}
@@ -509,10 +571,10 @@ function ChatComposer({
         </div>
         <div className="onmi-composer-spacer" />
         <span className="onmi-mono onmi-composer-count">{inputMessage.length} / 8,192</span>
-        <button type="button" className="onmi-btn primary" disabled={isDisabled} onClick={onSend}>
-          <Send size={12} />
-          <span className="onmi-send-label">{isLoading ? t('发送中', 'Sending') : t('发送', 'Send')}</span>
-          <kbd>Enter</kbd>
+        <button type="button" className={cn('onmi-btn primary', isLoading && 'stop')} disabled={!isLoading && isDisabled} onClick={isLoading ? onStop : onSend}>
+          {isLoading ? <Square size={12} /> : <Send size={12} />}
+          <span className="onmi-send-label">{isLoading ? t('停止', 'Stop') : t('发送', 'Send')}</span>
+          {!isLoading && <kbd>Enter</kbd>}
         </button>
       </div>
     </section>
@@ -527,4 +589,54 @@ function getInitials(name: string) {
   const cleaned = name.trim();
   if (!cleaned) return 'YS';
   return cleaned.slice(0, 2).toUpperCase();
+}
+
+function buildTranscriptMarkdown(conversation: Conversation) {
+  const lines = [
+    `# ${conversation.title || 'ONMI session'}`,
+    '',
+    `- Session ID: ${conversation.id}`,
+    `- Provider: ${conversation.provider || 'unknown'}`,
+    `- Model: ${conversation.model || 'unknown'}`,
+    `- Created: ${new Date(conversation.created_at).toISOString()}`,
+    `- Exported: ${new Date().toISOString()}`,
+    '',
+    '---',
+    '',
+  ];
+
+  for (const message of conversation.messages) {
+    lines.push(
+      `## ${message.role === 'user' ? 'User' : 'Assistant'} - ${new Date(message.timestamp).toISOString()}`,
+      '',
+      message.content || '_No content_',
+      ''
+    );
+
+    if (message.hasThinking && message.thinkingContent) {
+      lines.push('<details>', '<summary>Thinking</summary>', '', message.thinkingContent, '', '</details>', '');
+    }
+  }
+
+  return lines.join('\n');
+}
+
+function sanitizeFilename(name: string) {
+  return name
+    .trim()
+    .replace(/[\\/:*?"<>|]+/g, '-')
+    .replace(/\s+/g, '-')
+    .slice(0, 80) || 'onmi-session';
+}
+
+function downloadTextFile(filename: string, content: string) {
+  const blob = new Blob([content], { type: 'text/markdown;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
 }

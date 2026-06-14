@@ -1,6 +1,6 @@
 import { useCallback, useState, type FormEvent, type ReactNode } from 'react';
 import { Navigate } from 'react-router-dom';
-import { ArrowRight, Check, Eye, EyeOff, KeyRound, Upload } from 'lucide-react';
+import { ArrowRight, Check, Eye, EyeOff, KeyRound } from 'lucide-react';
 import { toast } from 'sonner';
 import PasswordStrength from '@/components/PasswordStrength';
 import { OnmiLogo } from '@/components/onmi/OnmiPrimitives';
@@ -207,13 +207,6 @@ export default function AuthPage() {
             <ArrowRight size={14} />
           </button>
         </form>
-
-        <div className="onmi-rule">OR</div>
-
-        <button type="button" className="onmi-btn onmi-auth-import" onClick={() => toast.info(t('导入 .onmi 备份是占位功能。', 'Importing .onmi backups is a placeholder.'))}>
-          <Upload size={13} />
-          {t('导入已有的 .onmi 备份', 'Import existing .onmi backup')}
-        </button>
 
         <div className="onmi-auth-switch">
           {isLogin ? t('还没有账号？', 'No account yet?') : t('已有账号？', 'Have an account?')}{' '}

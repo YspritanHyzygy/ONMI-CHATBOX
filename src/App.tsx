@@ -10,6 +10,7 @@ const Settings = lazy(() => import('./pages/Settings'));
 const AuthPage = lazy(() => import('./pages/AuthPage'));
 const DataPage = lazy(() => import('./pages/Data'));
 const UsagePage = lazy(() => import('./pages/Usage'));
+const HistoryPage = lazy(() => import('./pages/History'));
 
 function App() {
   return (
@@ -48,6 +49,14 @@ function App() {
                 element={
                   <ProtectedRoute>
                     <DataPage />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/history"
+                element={
+                  <ProtectedRoute>
+                    <HistoryPage />
                   </ProtectedRoute>
                 }
               />

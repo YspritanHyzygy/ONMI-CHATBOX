@@ -18,6 +18,7 @@ interface AuthStore extends AuthState {
   changePassword: (currentPassword: string, newPassword: string, confirmPassword?: string) => Promise<{ success: boolean; message?: string; error?: string }>;
   checkUsername: (username: string) => Promise<{ available: boolean; message?: string }>;
   fetchUser: (userId: string) => Promise<{ success: boolean; user?: User; error?: string }>;
+  validateSession: () => Promise<boolean>;
   validatePassword: (password: string) => { isValid: boolean; errors: string[]; strength: 'weak' | 'medium' | 'strong' };
 }
 
@@ -41,6 +42,7 @@ const useAuthStore = create<AuthStore>()(
         localStorage.removeItem('gemini_video_webui_user_id');
         localStorage.removeItem('selectedModel');
         localStorage.removeItem('ai-parameters');
+        localStorage.removeItem('conversations');
       },
 
       setLoading: (loading: boolean) => {
@@ -71,6 +73,7 @@ const useAuthStore = create<AuthStore>()(
           if (data.success) {
             set({ token: data.token || null });
             get().login(data.user);
+            localStorage.setItem('gemini_video_webui_user_id', data.user.id);
             return { success: true, message: data.message };
           } else {
             set({ isLoading: false });
@@ -108,6 +111,40 @@ const useAuthStore = create<AuthStore>()(
         } catch (error) {
           set({ isLoading: false });
           return { success: false, error: '网络错误，请重试' };
+        }
+      },
+
+      validateSession: async () => {
+        const { token } = get();
+        if (!token) {
+          get().logout();
+          return false;
+        }
+
+        try {
+          const response = await fetch('/api/auth/me', {
+            headers: {
+              'Authorization': `Bearer ${token}`,
+            },
+          });
+          const data = await response.json();
+
+          if (!response.ok || !data.success || !data.user) {
+            get().logout();
+            return false;
+          }
+
+          set({
+            user: data.user,
+            token,
+            isAuthenticated: true,
+            isLoading: false,
+          });
+          localStorage.setItem('gemini_video_webui_user_id', data.user.id);
+          return true;
+        } catch {
+          get().logout();
+          return false;
         }
       },
 
@@ -194,7 +231,10 @@ const useAuthStore = create<AuthStore>()(
 
       fetchUser: async (userId: string) => {
         try {
-          const response = await fetch(`/api/auth/user/${userId}`);
+          const { token } = get();
+          const response = await fetch(`/api/auth/user/${userId}`, {
+            headers: token ? { 'Authorization': `Bearer ${token}` } : undefined,
+          });
           const data = await response.json();
           
           if (data.success) {
