@@ -135,7 +135,6 @@ export default function DataPage() {
           provider="gemini"
           modelLabel="DATA TRANSFER"
           status="DATA · I/O"
-          onCommand={() => toast.info(copy('命令面板是占位功能。', 'Command palette is a placeholder.'))}
         />
       }
       sidebar={<OnmiStaticSidebar activeId="data" />}
@@ -146,8 +145,8 @@ export default function DataPage() {
           <h1>{copy('数据传输 · 导入导出', 'Data transfer · Import/Export')}</h1>
           <p>
             {copy(
-              '导出与导入继续使用项目现有 JSON 数据接口；加密 .onmi.zip 与跨应用格式识别先作为占位能力显示。',
-              'Export and import keep using the existing JSON data APIs. Encrypted .onmi.zip and cross-app format detection are shown as placeholders.'
+              '导出与导入使用项目现有 JSON 数据接口；当前不提供加密 .onmi.zip 或跨应用格式识别。',
+              'Export and import use the existing JSON data APIs. Encrypted .onmi.zip and cross-app format detection are not available.'
             )}
           </p>
         </div>
@@ -171,10 +170,9 @@ export default function DataPage() {
               <DataOption label={copy('全部会话', 'All sessions')} value={`${preview?.stats.conversations ?? 0} conv`} enabled />
               <DataOption label={copy('全部消息', 'All messages')} value={`${preview?.stats.messages ?? 0} msg`} enabled />
               <DataOption label={copy('API 凭证配置', 'API credential config')} value={`${preview?.stats.aiProviders ?? 0} cfg`} enabled />
-              <DataOption label={copy('提示词模板', 'Prompt templates')} value={copy('占位', 'placeholder')} />
               <div className="onmi-data-note">
                 <KeyRound size={13} />
-                <span>{copy('加密 .onmi.zip 备份暂未接入，当前导出为 JSON。', 'Encrypted .onmi.zip backup is not wired yet; current export is JSON.')}</span>
+                <span>{copy('当前导出为可检查的 JSON 文件。', 'Current exports are inspectable JSON files.')}</span>
               </div>
               <button type="button" className="onmi-btn primary" onClick={handleExport} disabled={isExporting}>
                 <Download size={13} />
@@ -211,7 +209,7 @@ export default function DataPage() {
 
               <div className="onmi-import-preview">
                 <Database size={14} />
-                <span>{copy('ChatGPT/Claude 导入识别暂未接入；当前只接受本项目导出的 JSON。', 'ChatGPT/Claude import detection is not wired yet; only this app JSON export is accepted.')}</span>
+                <span>{copy('当前只接受本项目导出的 JSON。', 'Only JSON exports from this app are accepted.')}</span>
               </div>
             </div>
           </div>

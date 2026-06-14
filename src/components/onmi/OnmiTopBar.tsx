@@ -48,12 +48,14 @@ export default function OnmiTopBar({
         </div>
       )}
       {controls}
-      <button type="button" className="onmi-command-button" onClick={onCommand}>
-        <Search size={13} />
-        <span>{commandLabel}</span>
-        <kbd>Ctrl</kbd>
-        <kbd>K</kbd>
-      </button>
+      {onCommand && (
+        <button type="button" className="onmi-command-button" onClick={onCommand}>
+          <Search size={13} />
+          <span>{commandLabel}</span>
+          <kbd>Ctrl</kbd>
+          <kbd>K</kbd>
+        </button>
+      )}
       {settingsHref && (
         <Link
           to={settingsHref}

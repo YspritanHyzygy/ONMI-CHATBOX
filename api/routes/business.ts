@@ -5,6 +5,7 @@
 import { Router, Request, Response } from 'express';
 import { ensureDatabaseInitialized } from '../services/database-init.js';
 import { resolveAuthenticatedUserId } from '../middleware/auth.js';
+import { calculateLocalUsageStats, type UsageMessage } from '../services/usage-stats.js';
 
 const router = Router();
 
@@ -135,29 +136,32 @@ router.get('/usage/:userId', async (req: Request, res: Response): Promise<void> 
       return;
     }
 
-    // TODO: 实现实际的使用统计查询
-    // 当前返回模拟数据
-    
-    const mockUsage = {
-      current: {
-        daily: 15,
-        monthly: 234,
-        tokens: 12500
-      },
-      limits: BUSINESS_CONFIG.plans.free.apiLimits,
-      remaining: {
-        daily: BUSINESS_CONFIG.plans.free.apiLimits.dailyRequests - 15,
-        monthly: BUSINESS_CONFIG.plans.free.apiLimits.monthlyRequests - 234
-      },
-      resetDate: {
-        daily: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
-        monthly: new Date(new Date().getFullYear(), new Date().getMonth() + 1, 1).toISOString()
+    const { data: conversations, error: conversationsError } = await db.getConversationsByUserId(userId);
+    if (conversationsError) {
+      res.status(500).json({
+        success: false,
+        error: 'Failed to load usage conversations'
+      });
+      return;
+    }
+
+    const messages: UsageMessage[] = [];
+    for (const conversation of conversations || []) {
+      const { data: conversationMessages } = await db.getMessagesByConversationId(conversation.id);
+      if (Array.isArray(conversationMessages)) {
+        messages.push(...conversationMessages);
       }
-    };
+    }
+
+    const usage = calculateLocalUsageStats(
+      conversations || [],
+      messages,
+      BUSINESS_CONFIG.plans.free.apiLimits
+    );
 
     res.json({
       success: true,
-      data: mockUsage
+      data: usage
     });
   } catch (error) {
     console.error('Get usage error:', error);

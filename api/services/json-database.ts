@@ -567,6 +567,122 @@ export class JSONDatabase {
     });
   }
 
+  async deleteConversationById(conversationId: string) {
+    return this.lockManager.withLock(`delete-conversation-${conversationId}`, async () => {
+      try {
+        if (!conversationId) {
+          throw new DatabaseError('Conversation ID is required', 'INVALID_PARAM');
+        }
+
+        const conversationIndex = this.data.conversations.findIndex(
+          conversation => conversation.id === conversationId
+        );
+
+        if (conversationIndex === -1) {
+          return {
+            data: null,
+            error: {
+              message: 'Conversation not found',
+              code: 'NOT_FOUND'
+            }
+          };
+        }
+
+        const [deletedConversation] = this.data.conversations.splice(conversationIndex, 1);
+        const deletedMessages = this.data.messages.filter(
+          message => message.conversation_id === conversationId
+        );
+        this.data.messages = this.data.messages.filter(
+          message => message.conversation_id !== conversationId
+        );
+
+        await this.saveData();
+        return {
+          data: {
+            conversation: deletedConversation,
+            messages: deletedMessages
+          },
+          error: null
+        };
+      } catch (error) {
+        console.error('Failed to delete conversation:', error);
+        return {
+          data: null,
+          error: {
+            message: error instanceof DatabaseError ? error.message : 'Failed to delete conversation',
+            code: error instanceof DatabaseError ? error.code : 'DELETE_ERROR'
+          }
+        };
+      }
+    });
+  }
+
+  async forkConversationForUser(userId: string, conversationId: string) {
+    return this.lockManager.withLock(`fork-${conversationId}`, async () => {
+      try {
+        if (!userId || !conversationId) {
+          throw new DatabaseError('User ID and conversation ID are required', 'INVALID_PARAM');
+        }
+
+        const conversation = this.data.conversations.find(
+          item => item.id === conversationId && item.user_id === userId
+        );
+
+        if (!conversation) {
+          return {
+            data: null,
+            error: {
+              message: 'Conversation not found',
+              code: 'NOT_FOUND'
+            }
+          };
+        }
+
+        const now = new Date().toISOString();
+        const forkedConversation = {
+          ...conversation,
+          id: uuidv4(),
+          title: `${conversation.title || 'Untitled session'} (fork)`,
+          created_at: now,
+          updated_at: now
+        };
+
+        const sourceMessages = this.data.messages
+          .filter(message => message.conversation_id === conversationId)
+          .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+
+        const forkedMessages = sourceMessages.map(message => ({
+          ...message,
+          id: uuidv4(),
+          conversation_id: forkedConversation.id,
+          created_at: now,
+          updated_at: now
+        }));
+
+        this.data.conversations.push(forkedConversation);
+        this.data.messages.push(...forkedMessages);
+        await this.saveData();
+
+        return {
+          data: {
+            conversation: forkedConversation,
+            messages: forkedMessages
+          },
+          error: null
+        };
+      } catch (error) {
+        console.error('Failed to fork conversation:', error);
+        return {
+          data: null,
+          error: {
+            message: error instanceof DatabaseError ? error.message : 'Failed to fork conversation',
+            code: error instanceof DatabaseError ? error.code : 'FORK_ERROR'
+          }
+        };
+      }
+    });
+  }
+
   private validateImportPayload(userId: string, importData: ImportPayload, mergeMode: ImportMergeMode) {
     const errors: string[] = [];
     const conversations = importData?.conversations || [];

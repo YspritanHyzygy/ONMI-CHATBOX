@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import type { LucideIcon } from 'lucide-react';
-import { Activity, Database, KeyRound, MessageSquare, Settings } from 'lucide-react';
+import { Activity, Database, History as HistoryIcon, KeyRound, MessageSquare } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { OnmiLogo } from './OnmiPrimitives';
 
@@ -16,10 +16,10 @@ export interface OnmiNavItem {
 
 const MAIN_ONMI_NAV: OnmiNavItem[] = [
   { id: 'chat', label: '会话控制台', path: '/chat', icon: MessageSquare },
+  { id: 'history', label: 'History', path: '/history', icon: HistoryIcon },
   { id: 'settings', label: 'API 凭证', path: '/settings', icon: KeyRound },
   { id: 'data', label: '数据 · I/O', path: '/data', icon: Database },
   { id: 'usage', label: '本地用量', path: '/usage', icon: Activity, badge: 'EST' },
-  { id: 'command', label: '命令面板', path: '/chat', icon: Settings, placeholder: true },
 ];
 
 interface OnmiPageShellProps {

@@ -4,7 +4,7 @@
  */
 import { Router, Request, Response } from 'express';
 import { ensureDatabaseInitialized } from '../services/database-init.js';
-import { createSession, requireAuth } from '../middleware/auth.js';
+import { createSession, requireAuth, resolveAuthenticatedUserId } from '../middleware/auth.js';
 
 const router = Router();
 
@@ -168,15 +168,61 @@ router.post('/login', async (req: Request, res: Response): Promise<void> => {
 });
 
 /**
+ * Return the authenticated user for persisted-session validation.
+ * GET /api/auth/me
+ */
+router.get('/me', requireAuth, async (req: Request, res: Response): Promise<void> => {
+  try {
+    const scopedUser = resolveAuthenticatedUserId(req);
+    if (!scopedUser.ok) {
+      res.status(scopedUser.status).json({
+        success: false,
+        error: scopedUser.error
+      });
+      return;
+    }
+
+    const db = await ensureDatabaseInitialized();
+    const { data: user, error } = await db.findUserById(scopedUser.userId);
+
+    if (error || !user) {
+      res.status(404).json({
+        success: false,
+        error: 'User not found'
+      });
+      return;
+    }
+
+    res.json({
+      success: true,
+      user
+    });
+  } catch (error) {
+    console.error('Get current user error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Server internal error'
+    });
+  }
+});
+
+/**
  * 获取用户信息
  * GET /api/auth/user/:userId
  */
-router.get('/user/:userId', async (req: Request, res: Response): Promise<void> => {
+router.get('/user/:userId', requireAuth, async (req: Request, res: Response): Promise<void> => {
   try {
-    const { userId } = req.params;
+    const scopedUser = resolveAuthenticatedUserId(req, req.params.userId);
+    if (!scopedUser.ok) {
+      res.status(scopedUser.status).json({
+        success: false,
+        error: scopedUser.error
+      });
+      return;
+    }
 
     const db = await ensureDatabaseInitialized();
-    const { data: user, error } = await db.findUserById(userId);
+    const { data: user, error } = await db.findUserById(scopedUser.userId);
 
     if (error || !user) {
       res.status(404).json({

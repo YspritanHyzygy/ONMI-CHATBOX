@@ -66,6 +66,7 @@ export function useChat() {
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   const handleModelChange = useCallback((model: ModelOption) => {
     try {
@@ -130,10 +131,19 @@ export function useChat() {
       const response = await fetchWithAuth('/api/chat/conversations');
       if (response.ok) {
         const data = await response.json();
-        if (data.success && Array.isArray(data.conversations) && data.conversations.length > 0) {
-          const apiConversations = data.conversations.map((conv: any) => ({
+        const conversationList = Array.isArray(data.conversations)
+          ? data.conversations
+          : Array.isArray(data.data)
+            ? data.data
+            : [];
+
+        if (data.success) {
+          const apiConversations = conversationList.map((conv: any) => ({
             ...conv,
-            created_at: new Date(conv.created_at)
+            created_at: new Date(conv.created_at),
+            provider: conv.provider || conv.provider_used,
+            model: conv.model || conv.model_used,
+            messages: Array.isArray(conv.messages) ? conv.messages : []
           }));
           apiConversations.sort((a: any, b: any) => b.created_at.getTime() - a.created_at.getTime());
           setConversations(apiConversations);
@@ -170,6 +180,56 @@ export function useChat() {
       return [];
     }
   }, []);
+
+  const forkCurrentConversation = useCallback(async () => {
+    if (!currentConversation) {
+      throw new Error(t('chat.noConversationToFork', { defaultValue: 'No session to fork.' }));
+    }
+
+    const response = await fetchWithAuth(`/api/chat/conversations/${currentConversation.id}/fork`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    });
+    const result = await response.json();
+    if (!response.ok || !result.success) {
+      throw new Error(result.error || t('chat.forkFailed', { defaultValue: 'Failed to fork session.' }));
+    }
+
+    const rawConversation = result.conversation || result.data?.conversation;
+    const rawMessages = result.messages || result.data?.messages || [];
+    if (!rawConversation) {
+      throw new Error(t('chat.forkFailed', { defaultValue: 'Failed to fork session.' }));
+    }
+    const forkedConversation: Conversation = {
+      ...rawConversation,
+      created_at: new Date(rawConversation.created_at),
+      provider: rawConversation.provider || rawConversation.provider_used || currentConversation.provider,
+      model: rawConversation.model || rawConversation.model_used || currentConversation.model,
+      messages: rawMessages.map((msg: any) => ({
+        id: msg.id,
+        content: msg.content,
+        role: msg.role,
+        timestamp: new Date(msg.created_at),
+        hasThinking: msg.has_thinking,
+        thinkingContent: msg.thinking_content,
+        thinkingTokens: msg.thinking_tokens,
+        reasoningEffort: msg.reasoning_effort,
+        thoughtSignature: msg.thought_signature
+      })),
+    };
+
+    setCurrentConversation(forkedConversation);
+    setConversations(prev => {
+      const next = [forkedConversation, ...prev.filter(conv => conv.id !== forkedConversation.id)];
+      saveConversationsToStorage(next);
+      return next;
+    });
+
+    const url = new URL(window.location.href);
+    url.searchParams.set('conversation', forkedConversation.id);
+    window.history.replaceState({}, '', url.toString());
+    return forkedConversation;
+  }, [currentConversation, saveConversationsToStorage, t]);
 
   const checkUrlParams = useCallback(() => {
     const urlParams = new URLSearchParams(window.location.search);
@@ -314,6 +374,8 @@ export function useChat() {
     });
 
     try {
+      const abortController = new AbortController();
+      abortControllerRef.current = abortController;
       const url = new URL('/api/chat', window.location.origin);
       url.searchParams.set('stream', 'true');
 
@@ -326,7 +388,8 @@ export function useChat() {
           model: updatedConversation.model,
           conversationId: updatedConversation.id,
           parameters: aiParameters
-        })
+        }),
+        signal: abortController.signal
       });
 
       if (!response.ok) {
@@ -462,13 +525,16 @@ export function useChat() {
               throw new Error(t('chat.streamTimeout', { defaultValue: 'Stream response timed out, please retry.' }));
             }
           } catch (streamError) {
+            const wasStopped = streamError instanceof DOMException && streamError.name === 'AbortError';
             const errorMessage = streamError instanceof Error
               ? `${t('chat.sendError')}${streamError.message}`
               : `${t('chat.sendError')}${t('chat.unknownError')}`;
-            const interruptedNotice = t('chat.partialResponseNotice', { defaultValue: '\n\n[Connection interrupted, response may be incomplete]' });
+            const interruptedNotice = wasStopped
+              ? t('chat.stoppedResponseNotice', { defaultValue: '\n\n[Stopped by user; response may be incomplete]' })
+              : t('chat.partialResponseNotice', { defaultValue: '\n\n[Connection interrupted, response may be incomplete]' });
             const displayContent = fullContent
-              ? (streamTimedOut ? `${fullContent}${interruptedNotice}` : fullContent)
-              : errorMessage;
+              ? (streamTimedOut || wasStopped ? `${fullContent}${interruptedNotice}` : fullContent)
+              : (wasStopped ? t('chat.stoppedBeforeOutput', { defaultValue: '[Stopped before the model returned output]' }) : errorMessage);
 
             const errorUpdater = (msg: any) =>
               msg.id === aiMessageId ? { ...msg, content: displayContent, isTyping: false } : msg;
@@ -500,7 +566,10 @@ export function useChat() {
         }
       }
     } catch (error: unknown) {
-      const errorMessage = `${t('chat.sendError')}${error instanceof Error ? error.message : t('chat.unknownError')}`;
+      const wasStopped = error instanceof DOMException && error.name === 'AbortError';
+      const errorMessage = wasStopped
+        ? t('chat.stoppedBeforeOutput', { defaultValue: '[Stopped before the model returned output]' })
+        : `${t('chat.sendError')}${error instanceof Error ? error.message : t('chat.unknownError')}`;
       const errorUpdater = (msg: any) =>
         msg.id === aiMessageId ? { ...msg, content: errorMessage, isTyping: false } : msg;
       setCurrentConversation(prev => prev ? { ...prev, messages: prev.messages.map(errorUpdater) } : prev);
@@ -508,6 +577,7 @@ export function useChat() {
         conv.id === conversation!.id ? { ...conv, messages: conv.messages.map(errorUpdater) } : conv
       ));
     } finally {
+      abortControllerRef.current = null;
       setIsLoading(false);
       const finalUpdater = (msg: any) =>
         msg.id === aiMessageId ? { ...msg, isTyping: false } : msg;
@@ -517,6 +587,10 @@ export function useChat() {
       ));
     }
   }, [inputMessage, isLoading, currentConversation, selectedModel, conversations, aiParameters, t, saveConversationsToStorage]);
+
+  const stopGeneration = useCallback(() => {
+    abortControllerRef.current?.abort();
+  }, []);
 
   const handleKeyPress = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -587,8 +661,10 @@ export function useChat() {
     textareaRef,
     handleModelChange,
     handleSendMessage,
+    stopGeneration,
     handleKeyPress,
     createNewConversation,
+    forkCurrentConversation,
     clearAllConversations,
     formatTime,
     handleConversationSelect,

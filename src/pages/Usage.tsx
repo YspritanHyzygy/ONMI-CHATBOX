@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Activity, ArrowUpRight, BarChart3, Clock, DollarSign } from 'lucide-react';
-import { toast } from 'sonner';
 import OnmiTopBar from '@/components/onmi/OnmiTopBar';
 import { OnmiPageShell, OnmiStaticSidebar } from '@/components/onmi/OnmiShell';
 import { OnmiRule, ProviderGlyph } from '@/components/onmi/OnmiPrimitives';
@@ -26,14 +25,29 @@ interface UsageStats {
     daily: number;
     monthly: number;
   };
+  estimated?: boolean;
+  providers?: ProviderUsage[];
+  daily?: DailyUsage[];
 }
 
-const PROVIDER_ROWS = [
-  { id: 'openai', spend: 8.12, req: 1840, input: '0.94M', output: '0.18M', url: 'platform.openai.com/usage' },
-  { id: 'claude', spend: 6.04, req: 1212, input: '0.62M', output: '0.14M', url: 'console.anthropic.com/usage' },
-  { id: 'gemini', spend: 0.86, req: 920, input: '0.22M', output: '0.08M', url: 'aistudio.google.com' },
-  { id: 'xai', spend: 3.4, req: 246, input: '0.06M', output: '0.02M', url: 'console.x.ai' },
-];
+interface ProviderUsage {
+  provider: string;
+  requests: number;
+  messages: number;
+  conversations: number;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  models: string[];
+  lastUsed?: string;
+}
+
+interface DailyUsage {
+  date: string;
+  requests: number;
+  messages: number;
+  tokens: number;
+}
 
 export default function UsagePage() {
   const copy = useOnmiCopy();
@@ -70,13 +84,10 @@ export default function UsagePage() {
     };
   }, [userId]);
 
-  const days = useMemo(() => Array.from({ length: 30 }, (_, index) => ({
-    day: index,
-    value: 0.2 + Math.abs(Math.sin(index * 0.6) * 0.6) + (index > 22 ? 0.5 : 0) + (index % 7 < 2 ? -0.15 : 0.1),
-    provider: PROVIDER_ROWS[index % PROVIDER_ROWS.length].id,
-  })), []);
+  const providers = usage?.providers ?? [];
+  const days = useMemo(() => usage?.daily ?? buildEmptyDailySeries(), [usage?.daily]);
   const axisLabels = useMemo(() => buildAxisLabels(), []);
-  const max = Math.max(...days.map((day) => day.value));
+  const max = Math.max(1, ...days.map((day) => day.requests));
   const monthlyLimit = usage?.limits.monthlyRequests ?? 1000;
   const dailyLimit = usage?.limits.dailyRequests ?? 100;
 
@@ -91,7 +102,6 @@ export default function UsagePage() {
           provider="openai"
           modelLabel="LOCAL METER"
           status="LOCAL · METER"
-          onCommand={() => toast.info(copy('命令面板是占位功能。', 'Command palette is a placeholder.'))}
         />
       }
       sidebar={<OnmiStaticSidebar activeId="usage" />}
@@ -116,28 +126,30 @@ export default function UsagePage() {
         </div>
 
         <section className="onmi-usage-kpis">
-          <UsageKpi icon={<DollarSign size={15} />} label={copy('估算花费 · 30天', 'Est. spend · 30d')} value="$18.42" sub={copy('支付给 Provider', 'paid to providers')} accent />
-          <UsageKpi icon={<Activity size={15} />} label={copy('请求', 'Requests')} value={usage ? usage.current.monthly.toLocaleString() : isLoading ? '...' : '0'} sub={`${monthlyLimit.toLocaleString()} limit`} />
-          <UsageKpi icon={<BarChart3 size={15} />} label={copy('今日请求', 'Daily requests')} value={usage ? usage.current.daily.toLocaleString() : isLoading ? '...' : '0'} sub={`${dailyLimit.toLocaleString()} limit`} />
-          <UsageKpi icon={<ArrowUpRight size={15} />} label="Tokens" value={usage ? usage.current.tokens.toLocaleString() : isLoading ? '...' : '0'} sub={copy('本地估算', 'local estimate')} />
+          <UsageKpi icon={<Activity size={15} />} label={copy('本月请求', 'Monthly requests')} value={usage ? usage.current.monthly.toLocaleString() : isLoading ? '...' : '0'} sub={formatLimit(monthlyLimit)} accent />
+          <UsageKpi icon={<BarChart3 size={15} />} label={copy('今日请求', 'Daily requests')} value={usage ? usage.current.daily.toLocaleString() : isLoading ? '...' : '0'} sub={formatLimit(dailyLimit)} />
+          <UsageKpi icon={<ArrowUpRight size={15} />} label={copy('估算 tokens', 'Estimated tokens')} value={usage ? usage.current.tokens.toLocaleString() : isLoading ? '...' : '0'} sub={usage?.estimated ? copy('按本地消息长度估算', 'estimated from local message text') : copy('本地统计', 'local count')} />
+          <UsageKpi icon={<DollarSign size={15} />} label={copy('账单', 'Billing')} value={copy('外部', 'External')} sub={copy('以 Provider 官方后台为准', 'provider dashboards are authoritative')} />
         </section>
 
         <section className="onmi-usage-chart onmi-card">
           <div className="onmi-chart-head">
-            <OnmiRule>{copy('每日估算花费 · 按 Provider 分色', 'Daily est. spend · by provider')}</OnmiRule>
+            <OnmiRule>{copy('每日本地请求', 'Daily local requests')}</OnmiRule>
             <div className="onmi-chart-legend">
-              {PROVIDER_ROWS.map((provider) => (
-                <span key={provider.id}>
-                  <i style={{ background: `var(--p-${provider.id})` }} />
-                  <b className="onmi-mono">{provider.id}</b>
+              {providers.length === 0 ? (
+                <span><b className="onmi-mono">{copy('暂无 Provider 数据', 'No provider data yet')}</b></span>
+              ) : providers.map((provider) => (
+                <span key={provider.provider}>
+                  <i style={{ background: providerColor(provider.provider) }} />
+                  <b className="onmi-mono">{provider.provider}</b>
                 </span>
               ))}
             </div>
           </div>
           <div className="onmi-bars">
             {days.map((day) => (
-              <span key={day.day} title={`${day.provider}: $${day.value.toFixed(2)}`}>
-                <i style={{ height: `${(day.value / max) * 100}%`, background: `var(--p-${day.provider})` }} />
+              <span key={day.date} title={`${day.date}: ${day.requests} req, ${day.tokens} est. tokens`}>
+                <i style={{ height: `${(day.requests / max) * 100}%`, background: 'var(--sig)' }} />
               </span>
             ))}
           </div>
@@ -150,20 +162,25 @@ export default function UsagePage() {
 
         <section className="onmi-provider-usage onmi-card">
           <div className="onmi-provider-usage-head">
-            <OnmiRule>{copy('按 Provider 拆分 · 官方账单占位链接', 'Per-provider · official billing placeholders')}</OnmiRule>
+            <OnmiRule>{copy('按 Provider 拆分', 'Per-provider local breakdown')}</OnmiRule>
           </div>
-          {PROVIDER_ROWS.map((row) => (
-            <div className="onmi-provider-usage-row" key={row.id}>
-              <ProviderGlyph provider={row.id} size={30} />
+          {providers.length === 0 ? (
+            <div className="onmi-session-empty">
+              <Activity size={22} />
+              <span>{copy('还没有本地用量数据', 'No local usage data yet')}</span>
+            </div>
+          ) : providers.map((row) => (
+            <div className="onmi-provider-usage-row" key={row.provider}>
+              <ProviderGlyph provider={row.provider} size={30} />
               <span>
-                <strong>{getProviderName(row.id)}</strong>
-                <small className="onmi-mono">{row.url} ↗</small>
-                <i><b style={{ width: `${(row.spend / 8.12) * 100}%`, background: `var(--p-${row.id})` }} /></i>
+                <strong>{getProviderName(row.provider)}</strong>
+                <small className="onmi-mono">{row.conversations} sessions · {row.messages} messages · estimated</small>
+                <i><b style={{ width: `${providerShare(row.totalTokens, providers)}%`, background: providerColor(row.provider) }} /></i>
               </span>
-              <code>${row.spend.toFixed(2)}</code>
-              <code>{row.req} req</code>
-              <code>{row.input} in</code>
-              <code>{row.output} out</code>
+              <code>{row.requests} req</code>
+              <code>{formatCompact(row.inputTokens)} in</code>
+              <code>{formatCompact(row.outputTokens)} out</code>
+              <code>{formatCompact(row.totalTokens)} tok</code>
             </div>
           ))}
         </section>
@@ -197,4 +214,37 @@ function buildAxisLabels() {
     const label = formatter.format(date).toUpperCase();
     return index === 4 ? `${label} · today` : label;
   });
+}
+
+function buildEmptyDailySeries(): DailyUsage[] {
+  return Array.from({ length: 30 }, (_, index) => {
+    const date = new Date();
+    date.setDate(date.getDate() - (29 - index));
+    return {
+      date: date.toISOString().slice(0, 10),
+      requests: 0,
+      messages: 0,
+      tokens: 0,
+    };
+  });
+}
+
+function formatLimit(limit: number) {
+  return limit < 0 ? 'no local limit' : `${limit.toLocaleString()} limit`;
+}
+
+function providerColor(provider: string) {
+  return `var(--p-${provider}, var(--sig))`;
+}
+
+function providerShare(tokens: number, providers: ProviderUsage[]) {
+  const maxTokens = Math.max(1, ...providers.map((provider) => provider.totalTokens));
+  return Math.max(4, (tokens / maxTokens) * 100);
+}
+
+function formatCompact(value: number) {
+  return new Intl.NumberFormat(undefined, {
+    notation: 'compact',
+    maximumFractionDigits: 1,
+  }).format(value);
 }
