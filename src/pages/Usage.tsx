@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { Activity, ArrowUpRight, BarChart3, Clock, DollarSign } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { Activity, AlertTriangle, ArrowUpRight, BarChart3, Clock, DollarSign, RefreshCw } from 'lucide-react';
 import OnmiTopBar from '@/components/onmi/OnmiTopBar';
 import { OnmiPageShell, OnmiStaticSidebar } from '@/components/onmi/OnmiShell';
 import { OnmiRule, ProviderGlyph } from '@/components/onmi/OnmiPrimitives';
@@ -55,41 +55,43 @@ export default function UsagePage() {
   const { showSidebar, setShowSidebar } = useResponsiveSidebar();
   const [usage, setUsage] = useState<UsageStats | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const userId = user?.id;
 
-  useEffect(() => {
-    let cancelled = false;
-    async function loadUsage() {
-      if (!userId) {
-        setUsage(null);
-        setIsLoading(false);
-        return;
-      }
-      try {
-        setIsLoading(true);
-        const response = await fetchWithAuth(`/api/business/usage/${userId}`);
-        const result = await response.json();
-        if (!cancelled && result.success) {
-          setUsage(result.data);
-        }
-      } catch {
-        if (!cancelled) setUsage(null);
-      } finally {
-        if (!cancelled) setIsLoading(false);
-      }
+  const loadUsage = useCallback(async (signal?: AbortSignal) => {
+    if (!userId) {
+      setUsage(null);
+      setLoadError(copy('请先登录', 'Please sign in first'));
+      setIsLoading(false);
+      return;
     }
-    loadUsage();
-    return () => {
-      cancelled = true;
-    };
-  }, [userId]);
+    setIsLoading(true);
+    setLoadError(null);
+    try {
+      const response = await fetchWithAuth(`/api/business/usage/${encodeURIComponent(userId)}`, { signal });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || !result.success) throw new Error(result.error || copy('用量加载失败', 'Failed to load usage'));
+      setUsage(result.data);
+    } catch (error) {
+      if (signal?.aborted) return;
+      setLoadError(error instanceof Error ? error.message : copy('用量加载失败', 'Failed to load usage'));
+    } finally {
+      if (!signal?.aborted) setIsLoading(false);
+    }
+  }, [copy, userId]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void loadUsage(controller.signal);
+    return () => controller.abort();
+  }, [loadUsage]);
 
   const providers = usage?.providers ?? [];
   const days = useMemo(() => usage?.daily ?? buildEmptyDailySeries(), [usage?.daily]);
   const axisLabels = useMemo(() => buildAxisLabels(), []);
   const max = Math.max(1, ...days.map((day) => day.requests));
-  const monthlyLimit = usage?.limits.monthlyRequests ?? 1000;
-  const dailyLimit = usage?.limits.dailyRequests ?? 100;
+  const monthlyLimit = usage?.limits.monthlyRequests ?? -1;
+  const dailyLimit = usage?.limits.dailyRequests ?? -1;
 
   return (
     <OnmiPageShell
@@ -99,9 +101,7 @@ export default function UsagePage() {
         <OnmiTopBar
           sidebarOpen={showSidebar}
           onToggleSidebar={() => setShowSidebar((open) => !open)}
-          provider="openai"
           modelLabel="LOCAL METER"
-          status="LOCAL · METER"
         />
       }
       sidebar={<OnmiStaticSidebar activeId="usage" />}
@@ -125,10 +125,18 @@ export default function UsagePage() {
           </div>
         </div>
 
+        {loadError && (
+          <div className="onmi-data-error" role="alert">
+            <AlertTriangle size={14} />
+            <span>{loadError}</span>
+            <button type="button" onClick={() => void loadUsage()}><RefreshCw size={11} /> {copy('重试', 'Retry')}</button>
+          </div>
+        )}
+
         <section className="onmi-usage-kpis">
-          <UsageKpi icon={<Activity size={15} />} label={copy('本月请求', 'Monthly requests')} value={usage ? usage.current.monthly.toLocaleString() : isLoading ? '...' : '0'} sub={formatLimit(monthlyLimit)} accent />
-          <UsageKpi icon={<BarChart3 size={15} />} label={copy('今日请求', 'Daily requests')} value={usage ? usage.current.daily.toLocaleString() : isLoading ? '...' : '0'} sub={formatLimit(dailyLimit)} />
-          <UsageKpi icon={<ArrowUpRight size={15} />} label={copy('估算 tokens', 'Estimated tokens')} value={usage ? usage.current.tokens.toLocaleString() : isLoading ? '...' : '0'} sub={usage?.estimated ? copy('按本地消息长度估算', 'estimated from local message text') : copy('本地统计', 'local count')} />
+          <UsageKpi icon={<Activity size={15} />} label={copy('本月请求', 'Monthly requests')} value={usage ? usage.current.monthly.toLocaleString() : isLoading ? '...' : '—'} sub={formatLimit(monthlyLimit)} accent />
+          <UsageKpi icon={<BarChart3 size={15} />} label={copy('今日请求', 'Daily requests')} value={usage ? usage.current.daily.toLocaleString() : isLoading ? '...' : '—'} sub={formatLimit(dailyLimit)} />
+          <UsageKpi icon={<ArrowUpRight size={15} />} label={copy('估算 tokens', 'Estimated tokens')} value={usage ? usage.current.tokens.toLocaleString() : isLoading ? '...' : '—'} sub={usage?.estimated ? copy('按本地消息长度估算', 'estimated from local message text') : copy('本地统计', 'local count')} />
           <UsageKpi icon={<DollarSign size={15} />} label={copy('账单', 'Billing')} value={copy('外部', 'External')} sub={copy('以 Provider 官方后台为准', 'provider dashboards are authoritative')} />
         </section>
 
@@ -136,7 +144,9 @@ export default function UsagePage() {
           <div className="onmi-chart-head">
             <OnmiRule>{copy('每日本地请求', 'Daily local requests')}</OnmiRule>
             <div className="onmi-chart-legend">
-              {providers.length === 0 ? (
+              {loadError ? (
+                <span><b className="onmi-mono">{copy('数据不可用', 'Data unavailable')}</b></span>
+              ) : providers.length === 0 ? (
                 <span><b className="onmi-mono">{copy('暂无 Provider 数据', 'No provider data yet')}</b></span>
               ) : providers.map((provider) => (
                 <span key={provider.provider}>
@@ -146,25 +156,31 @@ export default function UsagePage() {
               ))}
             </div>
           </div>
-          <div className="onmi-bars">
-            {days.map((day) => (
-              <span key={day.date} title={`${day.date}: ${day.requests} req, ${day.tokens} est. tokens`}>
-                <i style={{ height: `${(day.requests / max) * 100}%`, background: 'var(--sig)' }} />
-              </span>
-            ))}
-          </div>
-          <div className="onmi-axis onmi-mono">
-            {axisLabels.map((label) => (
-              <span key={label}>{label}</span>
-            ))}
-          </div>
+          {loadError ? (
+            <div className="onmi-session-empty"><AlertTriangle size={22} /><span>{copy('无法绘制用量图表', 'Usage chart unavailable')}</span></div>
+          ) : (
+            <>
+              <div className="onmi-bars">
+                {days.map((day) => (
+                  <span key={day.date} title={`${day.date}: ${day.requests} req, ${day.tokens} est. tokens`}>
+                    <i style={{ height: `${(day.requests / max) * 100}%`, background: 'var(--sig)' }} />
+                  </span>
+                ))}
+              </div>
+              <div className="onmi-axis onmi-mono">
+                {axisLabels.map((label) => <span key={label}>{label}</span>)}
+              </div>
+            </>
+          )}
         </section>
 
         <section className="onmi-provider-usage onmi-card">
           <div className="onmi-provider-usage-head">
             <OnmiRule>{copy('按 Provider 拆分', 'Per-provider local breakdown')}</OnmiRule>
           </div>
-          {providers.length === 0 ? (
+          {loadError ? (
+            <div className="onmi-session-empty"><AlertTriangle size={22} /><span>{copy('用量数据当前不可用', 'Usage data is currently unavailable')}</span></div>
+          ) : providers.length === 0 ? (
             <div className="onmi-session-empty">
               <Activity size={22} />
               <span>{copy('还没有本地用量数据', 'No local usage data yet')}</span>

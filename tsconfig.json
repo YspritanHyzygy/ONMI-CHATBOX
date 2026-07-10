@@ -35,6 +35,8 @@
   },
   "include": [
     "src",
-    "api"
+    "api",
+    "e2e",
+    "playwright.config.ts"
   ]
 }

@@ -6,7 +6,7 @@ import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/com
 import { cn } from '@/lib/utils';
 
 interface LanguageSettingsProps {
-  loadConfigs: () => void;
+  loadConfigs: () => Promise<void>;
 }
 
 export default function LanguageSettings({ loadConfigs }: LanguageSettingsProps) {
@@ -14,7 +14,7 @@ export default function LanguageSettings({ loadConfigs }: LanguageSettingsProps)
 
   const changeLanguage = async (lang: string) => {
     await i18n.changeLanguage(lang);
-    loadConfigs();
+    await loadConfigs().catch(() => undefined);
   };
 
   return (

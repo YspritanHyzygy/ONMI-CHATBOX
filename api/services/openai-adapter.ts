@@ -10,6 +10,9 @@ import {
   StreamResponse, 
   AIServiceError 
 } from './types.js';
+import { getSafeErrorMessage } from './error-utils.js';
+
+type AbortableConfig = AIServiceConfig & { signal?: AbortSignal };
 
 export class OpenAIAdapter implements AIServiceAdapter {
   provider = 'openai' as const;
@@ -37,17 +40,21 @@ export class OpenAIAdapter implements AIServiceAdapter {
       };
 
       // 默认添加 temperature 参数
-      requestParams.temperature = config.temperature || 0.7;
+      requestParams.temperature = config.temperature ?? 0.7;
 
       let response;
       try {
-        response = await client.chat.completions.create(requestParams);
+        response = await client.chat.completions.create(requestParams, {
+          signal: (config as AbortableConfig).signal
+        });
       } catch (error: any) {
         // 如果是 temperature 不支持的错误，重试不带 temperature 参数
         if (error.code === 'unsupported_value' && error.param === 'temperature') {
           console.log(`[OpenAI] 模型 ${config.model} 不支持自定义 temperature，使用默认值重试`);
           delete requestParams.temperature;
-          response = await client.chat.completions.create(requestParams);
+          response = await client.chat.completions.create(requestParams, {
+            signal: (config as AbortableConfig).signal
+          });
         } else {
           throw error;
         }
@@ -94,17 +101,21 @@ export class OpenAIAdapter implements AIServiceAdapter {
       };
 
       // 默认添加 temperature 参数
-      streamParams.temperature = config.temperature || 0.7;
+      streamParams.temperature = config.temperature ?? 0.7;
 
       let stream;
       try {
-        stream = await client.chat.completions.create(streamParams);
+        stream = await client.chat.completions.create(streamParams, {
+          signal: (config as AbortableConfig).signal
+        });
       } catch (error: any) {
         // 如果是 temperature 不支持的错误，重试不带 temperature 参数
         if (error.code === 'unsupported_value' && error.param === 'temperature') {
           console.log(`[OpenAI] 模型 ${config.model} 不支持自定义 temperature，使用默认值重试`);
           delete streamParams.temperature;
-          stream = await client.chat.completions.create(streamParams);
+          stream = await client.chat.completions.create(streamParams, {
+            signal: (config as AbortableConfig).signal
+          });
         } else {
           throw error;
         }
@@ -143,7 +154,9 @@ export class OpenAIAdapter implements AIServiceAdapter {
 
   async testConnection(config: AIServiceConfig): Promise<boolean> {
     try {
-      console.log(`[DEBUG] OpenAI testConnection - Creating client with baseURL: ${config.baseUrl || 'https://api.openai.com/v1'}`);
+      console.log('[DEBUG] OpenAI testConnection - Creating client', {
+        customEndpoint: Boolean(config.baseUrl)
+      });
       const client = this.createClient(config);
       
       // 通过获取模型列表来测试连接，而不是发送聊天消息
@@ -155,7 +168,7 @@ export class OpenAIAdapter implements AIServiceAdapter {
       return true;
     } catch (error: any) {
       console.error('[DEBUG] OpenAI testConnection - Error:', {
-        message: error.message,
+        message: getSafeErrorMessage(error),
         status: error.status,
         code: error.code,
         type: error.type
@@ -270,7 +283,7 @@ export class OpenAIAdapter implements AIServiceAdapter {
         name: model.name
       }));
     } catch (error: any) {
-      console.error('OpenAI获取模型列表失败:', error);
+      console.error('OpenAI获取模型列表失败:', getSafeErrorMessage(error));
       
       // API调用失败时抛出错误，不返回默认模型
       throw new AIServiceError(
@@ -333,7 +346,7 @@ export class OpenAIAdapter implements AIServiceAdapter {
       await (client as any).responses.delete(responseId);
       return true;
     } catch (error: any) {
-      console.error('OpenAI删除响应失败:', error);
+      console.error('OpenAI删除响应失败:', getSafeErrorMessage(error));
       return false;
     }
   }

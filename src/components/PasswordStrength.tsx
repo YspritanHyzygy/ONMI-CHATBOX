@@ -1,6 +1,7 @@
 import { useMemo, useEffect } from 'react';
 import { Shield, ShieldCheck, ShieldAlert } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
+import { useOnmiCopy } from '@/components/onmi/useOnmiCopy';
 
 interface PasswordStrengthProps {
   password: string;
@@ -8,12 +9,13 @@ interface PasswordStrengthProps {
 }
 
 export default function PasswordStrength({ password, onValidation }: PasswordStrengthProps) {
+  const copy = useOnmiCopy();
   const validation = useMemo(() => {
     const errors: string[] = [];
     let strength: 'weak' | 'medium' | 'strong' = 'weak';
 
     if (password.length < 6) {
-      errors.push('密码长度不能少于6个字符');
+      errors.push(copy('密码长度不能少于 6 个字符', 'Password must contain at least 6 characters'));
     }
 
     let score = 0;
@@ -27,7 +29,7 @@ export default function PasswordStrength({ password, onValidation }: PasswordStr
     else if (score >= 2) strength = 'medium';
 
     return { isValid: errors.length === 0, errors, strength };
-  }, [password]);
+  }, [copy, password]);
 
   useEffect(() => {
     if (onValidation && password) {
@@ -40,9 +42,9 @@ export default function PasswordStrength({ password, onValidation }: PasswordStr
   const { errors, strength } = validation;
 
   const strengthConfig = {
-    strong: { icon: ShieldCheck, label: '强', variant: 'default' as const, className: 'bg-green-500/15 text-green-700 border-green-200 dark:text-green-400' },
-    medium: { icon: ShieldAlert, label: '中等', variant: 'default' as const, className: 'bg-yellow-500/15 text-yellow-700 border-yellow-200 dark:text-yellow-400' },
-    weak: { icon: Shield, label: '弱', variant: 'destructive' as const, className: 'bg-destructive/15 text-destructive border-destructive/20' },
+    strong: { icon: ShieldCheck, label: copy('强', 'Strong'), variant: 'default' as const, className: 'bg-green-500/15 text-green-700 border-green-200 dark:text-green-400' },
+    medium: { icon: ShieldAlert, label: copy('中等', 'Medium'), variant: 'default' as const, className: 'bg-yellow-500/15 text-yellow-700 border-yellow-200 dark:text-yellow-400' },
+    weak: { icon: Shield, label: copy('弱', 'Weak'), variant: 'destructive' as const, className: 'bg-destructive/15 text-destructive border-destructive/20' },
   };
   const config = strengthConfig[strength];
   const Icon = config.icon;
@@ -51,7 +53,7 @@ export default function PasswordStrength({ password, onValidation }: PasswordStr
     <div className="mt-2 space-y-2">
       <Badge variant="outline" className={`gap-1.5 ${config.className}`}>
         <Icon className="h-3.5 w-3.5" />
-        密码强度：{config.label}
+        {copy('密码强度', 'Password strength')}: {config.label}
       </Badge>
 
       {errors.length > 0 && (
@@ -67,13 +69,13 @@ export default function PasswordStrength({ password, onValidation }: PasswordStr
 
       {password.length > 0 && strength !== 'strong' && (
         <div className="text-xs text-muted-foreground">
-          <p className="font-medium mb-0.5">建议：</p>
+          <p className="font-medium mb-0.5">{copy('建议', 'Suggestions')}:</p>
           <ul className="space-y-0.5">
-            {password.length < 8 && <li className="flex items-center gap-1"><span className="w-1 h-1 bg-muted-foreground/40 rounded-full" />使用至少8个字符</li>}
-            {!/[a-z]/.test(password) && <li className="flex items-center gap-1"><span className="w-1 h-1 bg-muted-foreground/40 rounded-full" />包含小写字母</li>}
-            {!/[A-Z]/.test(password) && <li className="flex items-center gap-1"><span className="w-1 h-1 bg-muted-foreground/40 rounded-full" />包含大写字母</li>}
-            {!/[0-9]/.test(password) && <li className="flex items-center gap-1"><span className="w-1 h-1 bg-muted-foreground/40 rounded-full" />包含数字</li>}
-            {!/[^a-zA-Z0-9]/.test(password) && <li className="flex items-center gap-1"><span className="w-1 h-1 bg-muted-foreground/40 rounded-full" />包含特殊字符</li>}
+            {password.length < 8 && <li className="flex items-center gap-1"><span className="w-1 h-1 bg-muted-foreground/40 rounded-full" />{copy('使用至少 8 个字符', 'Use at least 8 characters')}</li>}
+            {!/[a-z]/.test(password) && <li className="flex items-center gap-1"><span className="w-1 h-1 bg-muted-foreground/40 rounded-full" />{copy('包含小写字母', 'Include a lowercase letter')}</li>}
+            {!/[A-Z]/.test(password) && <li className="flex items-center gap-1"><span className="w-1 h-1 bg-muted-foreground/40 rounded-full" />{copy('包含大写字母', 'Include an uppercase letter')}</li>}
+            {!/[0-9]/.test(password) && <li className="flex items-center gap-1"><span className="w-1 h-1 bg-muted-foreground/40 rounded-full" />{copy('包含数字', 'Include a number')}</li>}
+            {!/[^a-zA-Z0-9]/.test(password) && <li className="flex items-center gap-1"><span className="w-1 h-1 bg-muted-foreground/40 rounded-full" />{copy('包含特殊字符', 'Include a special character')}</li>}
           </ul>
         </div>
       )}

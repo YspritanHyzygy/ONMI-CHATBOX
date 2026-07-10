@@ -36,7 +36,7 @@ interface ProviderSettingsProps {
   updateModel: (providerId: string, model: string, autoSaveEnabled?: boolean) => void;
   setAsDefault: (providerId: string) => void;
   manualSaveConfig: (providerId: string) => void;
-  testConnection: (providerId: string) => void;
+  testConnection: (providerId: string, modelId?: string) => void;
   testProviderConnection: (providerId: string) => void;
   fetchModels: (providerId: string) => void;
   togglePasswordVisibility: (providerId: string, fieldName: string) => void;
@@ -81,7 +81,7 @@ export default function ProviderSettings({
   // Test a specific model directly from the model row (paid path: 真的会发推理请求)
   const handleTestModel = (modelId: string) => {
     setTestModels((prev) => ({ ...prev, [provider.id]: modelId }));
-    testConnection(provider.id);
+    testConnection(provider.id, modelId);
   };
 
   const isFetching = (fetchingModels && fetchingModels[provider.id]) || false;
@@ -655,7 +655,7 @@ function ModelTable({
 }
 
 /* ------------------------------------------------------------------ */
-/* Deep Research sub-section (kept disabled, "coming soon")            */
+/* Deep Research sub-section (unsupported in this build)               */
 /* ------------------------------------------------------------------ */
 
 function DeepResearchSection({
@@ -686,7 +686,6 @@ function DeepResearchSection({
             );
           })}
         </div>
-        <div className="mt-3 text-xs text-muted-foreground">{t('settings.featureComingSoon')}</div>
       </div>
     </div>
   );

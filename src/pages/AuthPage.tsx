@@ -1,6 +1,6 @@
 import { useCallback, useState, type FormEvent, type ReactNode } from 'react';
 import { Navigate } from 'react-router-dom';
-import { ArrowRight, Check, Eye, EyeOff, KeyRound } from 'lucide-react';
+import { ArrowRight, Eye, EyeOff, KeyRound } from 'lucide-react';
 import { toast } from 'sonner';
 import PasswordStrength from '@/components/PasswordStrength';
 import { OnmiLogo } from '@/components/onmi/OnmiPrimitives';
@@ -30,7 +30,10 @@ export default function AuthPage() {
   }, []);
 
   const clearLocalData = () => {
-    const ok = window.confirm(t('清除所有本地登录与会话数据？', 'Clear all local login and session data?'));
+    const ok = window.confirm(t(
+      '清除当前浏览器中的登录状态与缓存？服务器上的会话历史不会被删除。',
+      'Clear sign-in state and cache in this browser? Server conversation history will not be deleted.',
+    ));
     if (!ok) return;
     localStorage.clear();
     setUsername('');
@@ -41,7 +44,7 @@ export default function AuthPage() {
     setError('');
     setShowPassword(false);
     setPasswordValidation(null);
-    toast.success(t('本地数据已清理', 'Local data cleared'));
+    toast.success(t('浏览器登录状态与缓存已清理', 'Browser sign-in state and cache cleared'));
     window.location.reload();
   };
 
@@ -89,14 +92,11 @@ export default function AuthPage() {
   };
 
   const bootLines = [
-    ['[ OK ]', t('加载本地凭证库 ...', 'load credential vault ...')],
-    ['[ OK ]', t('解锁 5 个 provider 适配器', 'unlock 5 provider adapters')],
-    ['[ OK ]', 'handshake · openai · 187ms'],
-    ['[ OK ]', 'handshake · anthropic · 224ms'],
-    ['[ OK ]', 'handshake · google · 96ms'],
-    ['[WARN]', 'handshake · xai · 412ms'],
-    ['[ -- ]', 'ollama · offline'],
-    ['[ OK ]', t('就绪。等待用户身份 ...', 'ready. awaiting identity ...')],
+    ['[ -- ]', t('等待本地账户身份', 'await local account identity')],
+    ['[ -- ]', t('登录后验证持久会话', 'verify persistent session after sign-in')],
+    ['[ -- ]', t('Provider 状态仅在配置或测试后确定', 'provider status is known only after configuration or testing')],
+    ['[ -- ]', t('会话历史保存在本机 JSON 数据库', 'session history is stored in the local JSON database')],
+    ['[WARN]', t('API Key 当前以明文保存在本机数据库', 'API keys are currently stored in plaintext in the local database')],
   ];
 
   return (
@@ -117,7 +117,7 @@ export default function AuthPage() {
           </div>
         </div>
         <div className="onmi-auth-foot onmi-mono">
-          <span>ONMI · CHATBOX · v0.4.2 · MIT</span>
+          <span>ONMI · CHATBOX · v0.1.0</span>
           <span>self-hosted · local-first</span>
         </div>
       </section>
@@ -127,8 +127,8 @@ export default function AuthPage() {
         <h1>{isLogin ? t('欢迎回来。', 'Welcome back.') : t('创建你的工作站', 'Create a workstation')}</h1>
         <p>
           {isLogin
-            ? t('用户名即身份。所有数据保留在你本地机器。', 'Your username is your identity. Everything stays on this machine.')
-            : t('无邀请码，无追踪。这是一个本地账号。', 'No invite code, no tracking. This is a local account.')}
+            ? t('账户与历史保存在这台服务器；聊天内容会发送给你配置的 Provider。', 'Your account and history stay on this server; chat content is sent to providers you configure.')
+            : t('创建一个仅供当前自托管实例使用的本地账号。', 'Create a local account for this self-hosted instance.')}
         </p>
 
         <div className="onmi-auth-note">
@@ -191,12 +191,10 @@ export default function AuthPage() {
             </>
           )}
 
-          <label className="onmi-auth-check">
-            <span>
-              <Check size={10} />
-            </span>
-            {t('使用 PIN 加密本地凭证库（推荐）', 'Encrypt local vault with PIN (recommended)')}
-          </label>
+          <div className="onmi-auth-check" role="note">
+            <span><KeyRound size={10} /></span>
+            {t('请仅在可信设备上保存 Provider API Key；当前版本尚未提供主密码加密。', 'Save provider API keys only on a trusted device; master-password encryption is not available yet.')}
+          </div>
 
           <button type="submit" className="onmi-btn primary onmi-auth-submit" disabled={isLoading}>
             {isLoading

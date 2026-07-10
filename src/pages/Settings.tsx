@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useCallback, useState, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { setStorageItem, getStorageItem } from '../lib/storage';
 import { fetchWithAuth } from '../lib/fetch';
@@ -14,12 +14,14 @@ import { PROVIDER_ORDER, getProviderName } from '@/components/onmi/providerMeta'
 import { useOnmiCopy } from '@/components/onmi/useOnmiCopy';
 import { useResponsiveSidebar } from '@/hooks/useResponsiveSidebar';
 import { cn } from '@/lib/utils';
+import { AlertTriangle, RefreshCw } from 'lucide-react';
 
 export default function Settings() {
   const { t } = useTranslation();
   const copy = useOnmiCopy();
   const [providers, setProviders] = useState<AIProvider[]>([]);
   const [configs, setConfigs] = useState<ProviderConfig[]>([]);
+  const [environmentProviders, setEnvironmentProviders] = useState<Set<string>>(() => new Set());
   const [activeTab, setActiveTabState] = useState<string>('');
   const { showSidebar, setShowSidebar } = useResponsiveSidebar();
 
@@ -30,7 +32,8 @@ export default function Settings() {
       console.error('Failed to save active tab:', result.error);
     }
   };
-  const [isLoading, setIsLoading] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [autoSaveTimeouts, setAutoSaveTimeouts] = useState<Record<string, NodeJS.Timeout>>({});
   const [testingProvider, setTestingProvider] = useState<string | null>(null);
   const [testResults, setTestResults] = useState<Record<string, { success: boolean; message: string }>>({});
@@ -43,6 +46,9 @@ export default function Settings() {
     researchModels?: (string | { id?: string; name?: string; [key: string]: unknown })[];
     message: string
   }>>({});
+  const modelFetchResultsRef = useRef(modelFetchResults);
+  modelFetchResultsRef.current = modelFetchResults;
+  const settingsLoadAbortRef = useRef<AbortController | null>(null);
   const [saveStatus, setSaveStatus] = useState<Record<string, { status: 'idle' | 'success' | 'error'; message: string; timestamp?: number }>>({});
   const [manualSaving, setManualSaving] = useState<Record<string, boolean>>({});
 
@@ -61,14 +67,6 @@ export default function Settings() {
   const [resetStatus, setResetStatus] = useState<{ status: 'idle' | 'loading' | 'success' | 'error'; message: string }>({ status: 'idle', message: '' });
 
   // ─── Effects ──────────────────────────────────────────────────────
-
-  useEffect(() => {
-    const loadData = async () => {
-      await loadProviders();
-      await loadConfigs();
-    };
-    loadData();
-  }, []);
 
   useEffect(() => {
     if (providers.length === 0) return;
@@ -108,7 +106,7 @@ export default function Settings() {
         if (fetchingModels && fetchingModels[config.provider]) return;
         setProviders(prev => prev.map(p => {
           if (p.id === config.provider) {
-            if (config.provider === 'ollama' && modelFetchResults[config.provider]?.success) return p;
+            if (config.provider === 'ollama' && modelFetchResultsRef.current[config.provider]?.success) return p;
             const hasDynamicModels = config.models?.some((model: any) =>
               model && typeof model === 'object' && ('id' in model || 'name' in model)
             );
@@ -155,14 +153,13 @@ export default function Settings() {
 
   // ─── Data loading ─────────────────────────────────────────────────
 
-  const loadProviders = async () => {
+  const loadProviders = useCallback(async (signal?: AbortSignal) => {
     try {
       type KnownProviderId = 'openai' | 'claude' | 'gemini' | 'xai' | 'ollama';
       interface ApiProviderData { id: KnownProviderId; name: string; description?: string; }
-      const response = await fetchWithAuth('/api/providers/supported');
-      if (response.ok) {
-        const result = await response.json();
-        if (result.success && result.data) {
+      const response = await fetchWithAuth('/api/providers/supported', { signal });
+      const result = await response.json().catch(() => ({})) as { success?: boolean; data?: ApiProviderData[]; error?: string };
+      if (response.ok && result.success && result.data) {
           const apiProviders: AIProvider[] = result.data.map((provider: ApiProviderData) => {
             const fieldConfig: Record<KnownProviderId, AIProvider['fields']> = {
               openai: [
@@ -201,42 +198,74 @@ export default function Settings() {
               models: modelLists[provider.id] || [],
             };
           });
-          setProviders(apiProviders);
-        }
+        setProviders(apiProviders);
       } else {
-        console.warn('API call failed, using fallback data');
-        setProviders(getFallbackProviders(t));
+        throw new Error(result.error || t('settings.loadProvidersFailed', { defaultValue: 'Failed to load supported providers' }));
       }
     } catch (error) {
+      if (signal?.aborted) return;
       console.error('Failed to load AI service providers:', error);
-      setProviders(getFallbackProviders(t));
+      setLoadError(error instanceof Error ? error.message : t('settings.loadProvidersFailed', { defaultValue: 'Failed to load supported providers' }));
+      throw error;
     }
-  };
+  }, [t]);
 
-  const loadConfigs = async () => {
+  const loadConfigs = useCallback(async (signal?: AbortSignal) => {
     try {
-      const response = await fetchWithAuth('/api/providers/config');
-      if (response.ok) {
-        const result = await response.json();
-        if (result.success && result.data) {
+      const [response, summaryResponse] = await Promise.all([
+        fetchWithAuth('/api/providers/config', { signal }),
+        fetchWithAuth('/api/providers', { signal }),
+      ]);
+      const result = await response.json().catch(() => ({})) as { success?: boolean; data?: Record<string, unknown>[]; error?: string };
+      const summaryResult = await summaryResponse.json().catch(() => ({})) as { success?: boolean; data?: Record<string, unknown>[]; error?: string };
+      if (response.ok && result.success && result.data && summaryResponse.ok && summaryResult.success && summaryResult.data) {
           const loadedConfigs: ProviderConfig[] = result.data.map((config: any) => {
             const { id, user_id, provider_name, available_models, default_model, is_active, created_at, updated_at, ...configFields } = config;
-            return { provider: config.provider_name, config: configFields, model: config.default_model || '', is_default: false, models: config.available_models || [] };
+            return { provider: config.provider_name, config: configFields, model: config.default_model || '', is_default: false, is_active: config.is_active !== false && config.is_active !== 'false', models: config.available_models || [] };
           });
           setConfigs(loadedConfigs);
-        } else {
-          setConfigs([]);
-        }
+          setEnvironmentProviders(new Set(
+            summaryResult.data
+              .filter((provider) => provider.source === 'environment')
+              .map((provider) => String(provider.id || provider.provider_name || ''))
+              .filter(Boolean)
+          ));
       } else {
-        setConfigs([]);
+        throw new Error(result.error || summaryResult.error || 'Failed to load provider configuration');
       }
     } catch (error) {
+      if (signal?.aborted) return;
       console.error('加载配置失败:', error);
-      setConfigs([]);
-    } finally {
-      setIsLoading(false);
+      setLoadError(error instanceof Error ? error.message : 'Failed to load provider configuration');
+      throw error;
     }
-  };
+  }, []);
+
+  const loadSettings = useCallback(async () => {
+    settingsLoadAbortRef.current?.abort();
+    const controller = new AbortController();
+    settingsLoadAbortRef.current = controller;
+    setIsLoading(true);
+    setLoadError(null);
+    try {
+      const results = await Promise.allSettled([
+        loadProviders(controller.signal),
+        loadConfigs(controller.signal),
+      ]);
+      if (controller.signal.aborted) return;
+      setIsLoading(false);
+      if (results.every((result) => result.status === 'fulfilled')) setLoadError(null);
+    } finally {
+      if (settingsLoadAbortRef.current === controller) {
+        settingsLoadAbortRef.current = null;
+      }
+    }
+  }, [loadConfigs, loadProviders]);
+
+  useEffect(() => {
+    void loadSettings();
+    return () => settingsLoadAbortRef.current?.abort();
+  }, [loadSettings]);
 
   // ─── Config helpers ───────────────────────────────────────────────
 
@@ -244,12 +273,18 @@ export default function Settings() {
     return configs.find(config => config.provider === providerId);
   };
 
-  const getProviderDisplayName = (providerId: string): string => {
-    const providerNames: { [key: string]: string } = { openai: 'OpenAI', claude: 'Anthropic Claude', gemini: 'Google Gemini', xai: 'xAI Grok', ollama: 'Ollama' };
-    return providerNames[providerId] || providerId.charAt(0).toUpperCase() + providerId.slice(1);
+  const clearProviderTestResult = (providerId: string) => {
+    setTestResults((previous) => {
+      if (!previous[providerId] && !previous[`${providerId}-responses`]) return previous;
+      const next = { ...previous };
+      delete next[providerId];
+      delete next[`${providerId}-responses`];
+      return next;
+    });
   };
 
   const updateConfig = (providerId: string, field: string, value: string | (string | { id?: string; name?: string; [key: string]: unknown })[], autoSaveEnabled: boolean = true) => {
+    clearProviderTestResult(providerId);
     setConfigs(prev => {
       const existingIndex = prev.findIndex(config => config.provider === providerId);
       if (existingIndex >= 0) {
@@ -261,11 +296,6 @@ export default function Settings() {
           newConfig.config = { ...newConfig.config, [field]: value as string };
         }
         updated[existingIndex] = newConfig;
-        if (field === 'model') {
-          const model = value as string;
-          const selectedModelData = { provider: providerId, providerName: getProviderDisplayName(providerId), model, displayName: model };
-          setStorageItem('selectedModel', selectedModelData);
-        }
         return updated;
       } else {
         const provider = providers.find(p => p.id === providerId);
@@ -295,13 +325,12 @@ export default function Settings() {
   };
 
   const updateModel = (providerId: string, model: string, autoSaveEnabled: boolean = true) => {
+    clearProviderTestResult(providerId);
     setConfigs(prev => {
       const existingIndex = prev.findIndex(config => config.provider === providerId);
       if (existingIndex >= 0) {
         const updated = [...prev];
         updated[existingIndex] = { ...updated[existingIndex], model };
-        const selectedModelData = { provider: providerId, providerName: getProviderDisplayName(providerId), model, displayName: model };
-        setStorageItem('selectedModel', selectedModelData);
         return updated;
       }
       return prev;
@@ -331,7 +360,7 @@ export default function Settings() {
       // 走 ref 而不是闭包：防抖 setTimeout 捕获的是旧的 saveConfig 实例，
       // 那个实例的 configs 闭包可能还是空数组（尤其是粘贴 API Key 后的首次自动保存）
       const config = configsRef.current.find(c => c.provider === providerId);
-      if (!config) throw new Error('配置不存在');
+      if (!config) throw new Error(copy('配置不存在', 'Configuration does not exist'));
 
       // 必填字段未填时：
       // - 静默自动保存 → 直接 return（用户还在编辑，不打扰，也不删除已有配置）
@@ -356,11 +385,12 @@ export default function Settings() {
       // 非 2xx 响应（401/403/500 等）也要解析错误信息，否则用户只看到"保存失败"不知道原因
       const result = await response.json().catch(() => ({ success: false, error: `HTTP ${response.status}` }));
       if (!response.ok || !result.success) {
-        throw new Error(result.error || `保存配置失败 (HTTP ${response.status})`);
+        throw new Error(result.error || copy(
+          `保存配置失败 (HTTP ${response.status})`,
+          `Failed to save configuration (HTTP ${response.status})`,
+        ));
       }
-      const selectedModelData = { provider: providerId, providerName: getProviderDisplayName(providerId), model: config.model, displayName: config.model };
-      setStorageItem('selectedModel', selectedModelData);
-      window.dispatchEvent(new Event('localStorageChanged'));
+      window.dispatchEvent(new Event('modelsUpdated'));
 
       // 手动保存和自动保存都展示反馈，自动保存使用更短的停留时间
       const statusMessage = isManual ? t('settings.configSaved') : t('settings.autoSaved');
@@ -378,50 +408,51 @@ export default function Settings() {
     }
   };
 
-  const testConnection = async (providerId: string) => {
+  const testConnection = async (providerId: string, explicitModelId?: string) => {
     try {
       setTestingProvider(providerId);
       const config = getProviderConfig(providerId);
-      if (!config) { setTestResults(prev => ({ ...prev, [providerId]: { success: false, message: '请先配置提供商信息' } })); return; }
+      if (!config) { setTestResults(prev => ({ ...prev, [providerId]: { success: false, message: copy('请先配置 Provider 信息', 'Configure the provider first') } })); return; }
+      const requestedTestModel = explicitModelId || testModels[providerId];
       if (providerId === 'ollama') {
         const ollamaResults = modelFetchResults[providerId];
         if (!ollamaResults || !ollamaResults.success || ollamaResults.models.length === 0) {
-          setTestResults(prev => ({ ...prev, [providerId]: { success: false, message: 'Ollama需要先获取模型列表。请点击"获取模型列表"按钮获取已安装的模型，然后选择一个模型进行测试。' } }));
+          setTestResults(prev => ({ ...prev, [providerId]: { success: false, message: copy('Ollama 需要先获取模型列表，再选择一个模型进行测试。', 'Fetch the Ollama model list, then select a model to test.') } }));
           return;
         }
-        if (!testModels[providerId] || testModels[providerId] === 'auto') {
+        if (!requestedTestModel || requestedTestModel === 'auto') {
           if (ollamaResults?.success && ollamaResults.models.length > 0) {
             const autoSelectedModel = selectSmartDefaultModel(ollamaResults.models, providerId, 'test');
-            if (!autoSelectedModel) { setTestResults(prev => ({ ...prev, [providerId]: { success: false, message: '无法自动选择测试模型，请手动选择一个模型。' } })); return; }
-          } else { setTestResults(prev => ({ ...prev, [providerId]: { success: false, message: '请先选择一个模型进行测试。' } })); return; }
+            if (!autoSelectedModel) { setTestResults(prev => ({ ...prev, [providerId]: { success: false, message: copy('无法自动选择测试模型，请手动选择。', 'Could not choose a test model automatically; select one manually.') } })); return; }
+          } else { setTestResults(prev => ({ ...prev, [providerId]: { success: false, message: copy('请先选择一个模型进行测试。', 'Select a model to test first.') } })); return; }
         }
       }
-      if (providerId !== 'ollama' && !config.config.api_key) { setTestResults(prev => ({ ...prev, [providerId]: { success: false, message: 'API Key 是必填项' } })); return; }
+      if (providerId !== 'ollama' && !config.config.api_key) { setTestResults(prev => ({ ...prev, [providerId]: { success: false, message: copy('API Key 是必填项', 'API key is required') } })); return; }
       const response = await fetchWithAuth('/api/providers/test', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           providerName: providerId, apiKey: config.config.api_key, baseUrl: config.config.base_url,
           model: (() => {
-            if (testModels[providerId] === 'auto' && providerId === 'ollama') {
+            if (requestedTestModel === 'auto' && providerId === 'ollama') {
               const mr = modelFetchResults[providerId];
               if (mr?.success && mr.models.length > 0) return selectSmartDefaultModel(mr.models, providerId, 'test') || config.model || 'default';
             }
-            return testModels[providerId] || config.model || 'default';
+            return requestedTestModel || config.model || 'default';
           })(),
         }),
       });
       const result = await response.json();
       const testModel = (() => {
-        if (testModels[providerId] === 'auto' && providerId === 'ollama') {
+        if (requestedTestModel === 'auto' && providerId === 'ollama') {
           const mr = modelFetchResults[providerId];
-          if (mr?.success && mr.models.length > 0) { const a = selectSmartDefaultModel(mr.models, providerId, 'test'); return a ? `${a} (自动选择)` : (config.model || 'default'); }
+          if (mr?.success && mr.models.length > 0) { const a = selectSmartDefaultModel(mr.models, providerId, 'test'); return a ? `${a} (${copy('自动选择', 'auto-selected')})` : (config.model || 'default'); }
         }
-        return testModels[providerId] || config.model || 'default';
+        return requestedTestModel || config.model || 'default';
       })();
-      setTestResults(prev => ({ ...prev, [providerId]: { success: result.success, message: result.success ? `连接测试成功！使用模型: ${testModel}` : (result.error || '连接测试失败，请检查配置。') } }));
+      setTestResults(prev => ({ ...prev, [providerId]: { success: result.success, message: result.success ? copy(`连接测试成功：${testModel}`, `Connection test passed: ${testModel}`) : (result.error || copy('连接测试失败，请检查配置。', 'Connection test failed; check the configuration.')) } }));
     } catch (error) {
-      setTestResults(prev => ({ ...prev, [providerId]: { success: false, message: error instanceof Error ? error.message : '测试过程中发生错误' } }));
+      setTestResults(prev => ({ ...prev, [providerId]: { success: false, message: error instanceof Error ? error.message : copy('测试过程中发生错误', 'The test failed unexpectedly') } }));
     } finally {
       setTestingProvider(null);
     }
@@ -548,11 +579,12 @@ export default function Settings() {
 
   const fetchModels = async (providerId: string) => {
     if (fetchingModels && (fetchingModels as any)[providerId]) return;
+    clearProviderTestResult(providerId);
     setFetchingModels(prev => ({ ...(prev || {}), [providerId]: true }));
     try {
       const config = getProviderConfig(providerId);
       if (!config || (providerId !== 'ollama' && !config.config.api_key)) {
-        setModelFetchResults(prev => ({ ...prev, [providerId]: { success: false, models: [], researchModels: [], message: providerId === 'ollama' ? '请先配置服务器地址' : '请先配置API密钥' } }));
+        setModelFetchResults(prev => ({ ...prev, [providerId]: { success: false, models: [], researchModels: [], message: providerId === 'ollama' ? copy('请先配置服务器地址', 'Configure the server address first') : copy('请先配置 API Key', 'Configure an API key first') } }));
         return;
       }
       const response = await fetchWithAuth('/api/providers/models', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ providerName: providerId, apiKey: config.config.api_key, baseUrl: config.config.base_url }) });
@@ -573,7 +605,7 @@ export default function Settings() {
         const testModel = selectSmartDefaultModel(regularModels, providerId, 'test');
         const defaultModel = selectSmartDefaultModel(regularModels, providerId, 'default');
         if (providerId === 'ollama' && defaultModel) updateModel(providerId, defaultModel);
-        setModelFetchResults(prev => ({ ...prev, [providerId]: { success: true, models: regularModels, researchModels, message: providerId === 'ollama' && regularModels.length > 0 ? `${t('settings.fetchModelsSuccess')} 已自动选择默认模型: ${defaultModel}, 测试模型: ${testModel}` : t('settings.fetchModelsSuccess') } }));
+        setModelFetchResults(prev => ({ ...prev, [providerId]: { success: true, models: regularModels, researchModels, message: providerId === 'ollama' && regularModels.length > 0 ? copy(`${t('settings.fetchModelsSuccess')} 已选择默认模型 ${defaultModel}，测试模型 ${testModel}`, `${t('settings.fetchModelsSuccess')} Default: ${defaultModel}; test: ${testModel}`) : t('settings.fetchModelsSuccess') } }));
         setTimeout(async () => {
           try {
             // 同样走 ref 避免 setTimeout 闭包过期
@@ -588,11 +620,11 @@ export default function Settings() {
           } catch (error) { console.error('保存获取的模型列表失败:', error); }
         }, 100);
       } else {
-        setModelFetchResults(prev => ({ ...prev, [providerId]: { success: false, models: [], researchModels: [], message: result.error || '获取模型列表失败' } }));
+        setModelFetchResults(prev => ({ ...prev, [providerId]: { success: false, models: [], researchModels: [], message: result.error || copy('获取模型列表失败', 'Failed to fetch models') } }));
       }
     } catch (error) {
       console.error(`${providerId}获取模型网络错误:`, error);
-      setModelFetchResults(prev => ({ ...prev, [providerId]: { success: false, models: [], researchModels: [], message: '网络错误，请检查连接' } }));
+      setModelFetchResults(prev => ({ ...prev, [providerId]: { success: false, models: [], researchModels: [], message: copy('网络错误，请检查连接', 'Network error; check the connection') } }));
     } finally {
       setFetchingModels(null);
     }
@@ -630,7 +662,9 @@ export default function Settings() {
     const bi = PROVIDER_ORDER.indexOf(b.id);
     return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
   });
-  const configuredProviderCount = providers.filter((provider) => isProviderConfigured(provider.id, getProviderConfig(provider.id))).length;
+  const configuredProviderCount = providers.filter((provider) => (
+    isProviderConfigured(provider.id, getProviderConfig(provider.id), environmentProviders.has(provider.id))
+  )).length;
   const activeProvider = providers.find((provider) => provider.id === activeTab);
 
   const renderActivePanel = () => {
@@ -692,6 +726,21 @@ export default function Settings() {
     );
   }
 
+  if (loadError) {
+    return (
+      <div className="onmi onmi-app">
+        <div className="onmi-loading-screen" role="alert">
+          <AlertTriangle className="text-destructive" />
+          <strong>{copy('设置加载失败', 'Settings could not be loaded')}</strong>
+          <span className="onmi-mono">{loadError}</span>
+          <button type="button" className="onmi-btn" onClick={() => void loadSettings()}>
+            <RefreshCw size={12} /> {copy('重试', 'Retry')}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <OnmiPageShell
       sidebarOpen={showSidebar}
@@ -702,7 +751,6 @@ export default function Settings() {
           onToggleSidebar={() => setShowSidebar((open) => !open)}
           provider={activeProvider?.id || 'openai'}
           modelLabel={activeProvider ? getProviderName(activeProvider.id) : copy('设置', 'Settings')}
-          status="API · CONFIG"
         />
       }
       sidebar={<OnmiStaticSidebar activeId="settings" />}
@@ -710,11 +758,11 @@ export default function Settings() {
       <div className="onmi-settings onmi-scroll">
         <div className="onmi-page-header">
           <div className="onmi-section-label">CONFIG · 02 · API CREDENTIALS</div>
-          <h1>{copy('信号源 · API 凭证', 'Signal sources · API credentials')}</h1>
+          <h1>{copy('设置 · API 凭证', 'Settings · API credentials')}</h1>
           <p>
             {copy(
-              'ONMI 保留当前项目的真实 Provider 配置、模型拉取与连接测试逻辑；自定义端点与命令面板等能力先以占位状态呈现。',
-              'ONMI keeps the real provider configuration, model fetch, and connection test flows. Custom endpoints and command palette remain placeholders.'
+              '配置只表示凭证已保存；Provider 状态只有在你执行连接或模型测试后才会显示成功或失败。',
+              'Saved credentials mean configured, not connected. Provider status changes only after you run a connection or model test.'
             )}
           </p>
         </div>
@@ -723,6 +771,8 @@ export default function Settings() {
           providers={sortedProviders}
           activeTab={activeTab}
           configuredCount={configuredProviderCount}
+          testResults={testResults}
+          environmentProviders={environmentProviders}
           getProviderConfig={getProviderConfig}
           setActiveTab={setActiveTab}
         />
@@ -749,16 +799,35 @@ export default function Settings() {
 
 // ─── Fallback providers (when API fails) ────────────────────────────
 
-function isProviderConfigured(providerId: string, config?: ProviderConfig): boolean {
-  if (!config) return false;
-  if (providerId === 'ollama') return Boolean(config.config.base_url?.trim());
-  return Boolean(config.config.api_key?.trim());
+function isProviderConfigured(
+  providerId: string,
+  config?: ProviderConfig,
+  environmentConfigured = false,
+): boolean {
+  if (config && config.is_active !== false) {
+    const baseUrl = config.config.base_url?.trim();
+    let hasUsableBaseUrl = false;
+    if (baseUrl) {
+      try {
+        const url = new URL(baseUrl);
+        hasUsableBaseUrl = (url.protocol === 'http:' || url.protocol === 'https:') && Boolean(url.hostname);
+      } catch {
+        hasUsableBaseUrl = false;
+      }
+    }
+    if (providerId === 'ollama' && hasUsableBaseUrl) return true;
+    const key = config.config.api_key?.trim();
+    if (key && key !== 'undefined' && key !== 'null' && hasUsableBaseUrl) return true;
+  }
+  return environmentConfigured;
 }
 
 interface ProviderSignalBoardProps {
   providers: AIProvider[];
   activeTab: string;
   configuredCount: number;
+  testResults: Record<string, { success: boolean; message: string }>;
+  environmentProviders: Set<string>;
   getProviderConfig: (providerId: string) => ProviderConfig | undefined;
   setActiveTab: (tab: string) => void;
 }
@@ -767,11 +836,14 @@ function ProviderSignalBoard({
   providers,
   activeTab,
   configuredCount,
+  testResults,
+  environmentProviders,
   getProviderConfig,
   setActiveTab,
 }: ProviderSignalBoardProps) {
   const copy = useOnmiCopy();
   const total = providers.length || 5;
+  const testedOkCount = providers.filter((provider) => testResults[provider.id]?.success === true).length;
 
   return (
     <section className="onmi-signal-board">
@@ -785,11 +857,16 @@ function ProviderSignalBoard({
           <path d="M0,0 L130,0 A130,130 0 0,1 92,92 z" fill="var(--sig-glow)" opacity="0.55" />
           {providers.map((provider, index) => {
             const angle = (index / Math.max(providers.length, 1)) * Math.PI * 2 - Math.PI / 2;
-            const configured = isProviderConfigured(provider.id, getProviderConfig(provider.id));
-            const radius = configured ? 58 + index * 13 : 124;
+            const configured = isProviderConfigured(
+              provider.id,
+              getProviderConfig(provider.id),
+              environmentProviders.has(provider.id),
+            );
+            const testResult = testResults[provider.id];
+            const radius = testResult?.success ? 58 + index * 13 : configured ? 92 + index * 5 : 124;
             const x = Math.cos(angle) * radius;
             const y = Math.sin(angle) * radius;
-            const color = configured ? 'var(--sig)' : 'var(--fg-3)';
+            const color = testResult ? (testResult.success ? 'var(--ok)' : 'var(--err)') : configured ? 'var(--warn)' : 'var(--fg-3)';
             return (
               <g key={provider.id}>
                 <line x1="0" y1="0" x2={x} y2={y} stroke={color} strokeWidth="0.5" strokeDasharray="2 3" opacity="0.45" />
@@ -803,23 +880,33 @@ function ProviderSignalBoard({
           <circle cx="0" cy="0" r="6" fill="var(--bg-1)" stroke="var(--sig)" strokeWidth="1.5" />
           <circle cx="0" cy="0" r="2" fill="var(--sig)" />
         </svg>
-        <div className="onmi-radar-caption onmi-mono">0ms --- 100ms --- 500ms+</div>
+        <div className="onmi-radar-caption onmi-mono">CONFIGURATION MAP · NOT LATENCY</div>
       </div>
 
       <div className="onmi-provider-board">
         <div className="onmi-provider-kpis">
-          <MetricCard label={copy('已连接信号源', 'Active sources')} value={`${configuredCount}`} sub={`of ${total}`} accent />
+          <MetricCard label={copy('已配置', 'Configured')} value={`${configuredCount}`} sub={`of ${total}`} accent />
           <MetricCard label={copy('Provider 总数', 'Providers')} value={`${total}`} sub={copy('可配置', 'configurable')} />
-          <MetricCard label={copy('默认模型', 'Default model')} value="BYOK" sub={copy('用户自备密钥', 'bring your keys')} />
-          <MetricCard label={copy('自定义端点', 'Custom endpoint')} value="Soon" sub={copy('占位', 'placeholder')} />
+          <MetricCard label={copy('测试成功', 'Tested OK')} value={`${testedOkCount}`} sub={copy('以最近一次测试为准', 'latest test result')} />
+          <MetricCard label={copy('凭证存储', 'Credential storage')} value={copy('明文', 'Plaintext')} sub={copy('仅限可信设备', 'trusted devices only')} />
         </div>
 
         <OnmiRule>{copy('信号源列表', 'Signal sources')} · {total}</OnmiRule>
         <div className="onmi-provider-list">
           {providers.map((provider) => {
             const config = getProviderConfig(provider.id);
-            const configured = isProviderConfigured(provider.id, config);
+            const usesEnvironmentFallback = environmentProviders.has(provider.id)
+              && !isProviderConfigured(provider.id, config);
+            const configured = isProviderConfigured(provider.id, config, usesEnvironmentFallback);
+            const testResult = testResults[provider.id];
             const active = activeTab === provider.id;
+            const status = !configured
+              ? { state: 'off' as const, label: 'UNCONFIGURED' }
+              : !testResult
+                ? { state: 'warn' as const, label: 'UNTESTED' }
+                : testResult.success
+                  ? { state: 'ok' as const, label: 'TESTED OK' }
+                  : { state: 'err' as const, label: 'TEST FAILED' };
             return (
               <button
                 type="button"
@@ -832,8 +919,8 @@ function ProviderSignalBoard({
                   <strong>{getProviderName(provider.id)}</strong>
                   <small className="onmi-mono">{provider.models.length || config?.models?.length || 0} models</small>
                 </span>
-                <code>{maskCredential(provider.id, config)}</code>
-                <StatusDot state={configured ? 'live' : 'off'} label={configured ? 'LIVE' : 'OFF'} />
+                <code>{usesEnvironmentFallback ? 'environment fallback' : maskCredential(provider.id, config)}</code>
+                <StatusDot state={status.state} label={status.label} />
               </button>
             );
           })}
@@ -860,49 +947,4 @@ function maskCredential(providerId: string, config?: ProviderConfig): string {
   if (!key) return 'not configured';
   if (key.length <= 10) return `${key.slice(0, 3)}...`;
   return `${key.slice(0, 6)}...${key.slice(-4)}`;
-}
-
-function getFallbackProviders(t: (key: string) => string): AIProvider[] {
-  return [
-    {
-      id: 'openai', name: 'OpenAI', description: t('providers.openai.description'),
-      fields: [
-        { name: 'api_key', label: 'API Key', type: 'password', required: true, placeholder: 'sk-...', description: t('providers.openai.apiKeyDescription') },
-        { name: 'base_url', label: 'Base URL', type: 'url', required: false, placeholder: 'https://api.openai.com/v1', description: t('providers.openai.baseUrlDescription') },
-        { name: 'use_responses_api', label: t('providers.openai.useResponsesApi'), type: 'boolean', required: false, description: t('providers.openai.responsesApiDescription') },
-      ],
-      models: ['gpt-5', 'o3', 'o3-mini', 'gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo'],
-    },
-    {
-      id: 'claude', name: 'Anthropic Claude', description: t('providers.claude.description'),
-      fields: [
-        { name: 'api_key', label: 'API Key', type: 'password', required: true, placeholder: 'sk-ant-...', description: t('providers.claude.apiKeyDescription') },
-        { name: 'base_url', label: 'Base URL', type: 'url', required: false, placeholder: 'https://api.anthropic.com', description: t('providers.claude.baseUrlDescription') },
-      ],
-      models: ['claude-opus-4-1-20250805', 'claude-opus-4-20250514', 'claude-sonnet-4-20250514', 'claude-3-7-sonnet-20250219', 'claude-3-5-haiku-20241022'],
-    },
-    {
-      id: 'gemini', name: 'Google Gemini', description: t('providers.gemini.description'),
-      fields: [
-        { name: 'api_key', label: 'API Key', type: 'password', required: true, placeholder: 'AIza...', description: t('providers.gemini.apiKeyDescription') },
-        { name: 'base_url', label: 'Base URL', type: 'url', required: false, placeholder: 'https://generativelanguage.googleapis.com', description: t('providers.gemini.baseUrlDescription') },
-      ],
-      models: ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash', 'gemini-2.0-flash-lite'],
-    },
-    {
-      id: 'xai', name: 'xAI Grok', description: t('providers.xai.description'),
-      fields: [
-        { name: 'api_key', label: 'API Key', type: 'password', required: true, placeholder: 'xai-...', description: t('providers.xai.apiKeyDescription') },
-        { name: 'base_url', label: 'Base URL', type: 'url', required: false, placeholder: 'https://api.x.ai/v1', description: t('providers.xai.baseUrlDescription') },
-      ],
-      models: ['grok-4', 'grok-3', 'grok-2-1212', 'grok-2-vision-1212'],
-    },
-    {
-      id: 'ollama', name: 'Ollama', description: t('providers.ollama.description'),
-      fields: [
-        { name: 'base_url', label: 'Base URL', type: 'url', required: true, placeholder: 'http://localhost:11434', description: t('providers.ollama.baseUrlDescription') },
-      ],
-      models: [],
-    },
-  ];
 }

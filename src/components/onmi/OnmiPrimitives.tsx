@@ -50,7 +50,7 @@ export function ProviderGlyph({ provider, size = 24, active = false, className =
 }
 
 interface StatusDotProps {
-  state?: 'live' | 'ok' | 'warn' | 'err' | 'off';
+  state?: 'ok' | 'warn' | 'err' | 'off';
   label?: string;
 }
 

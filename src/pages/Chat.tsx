@@ -1,15 +1,27 @@
-import { useMemo, useState, type ComponentProps, type KeyboardEvent, type RefObject } from 'react';
+import {
+  useCallback,
+  useDeferredValue,
+  useEffect,
+  useMemo,
+  useState,
+  type ComponentProps,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type RefObject,
+} from 'react';
 import { Link } from 'react-router-dom';
 import {
   Activity,
+  AlertTriangle,
   Copy,
   Database,
   Download,
   KeyRound,
   LogOut,
   MessageSquare,
+  Pencil,
   Plus,
   RefreshCw,
+  Search,
   Send,
   SlidersHorizontal,
   Sparkles,
@@ -65,20 +77,44 @@ export default function Chat() {
     return saved === 'bubble' ? 'bubble' : 'doc';
   });
   const chat = useChat();
+  const selectConversation = chat.handleConversationSelect;
+  const startNewConversation = chat.createNewConversation;
 
-  const provider = chat.selectedModel?.provider || chat.currentConversation?.provider || 'openai';
+  const provider = chat.selectedModel?.provider || chat.currentConversation?.provider || '';
   const modelLabel = chat.selectedModel?.displayName || chat.currentConversation?.model || t('选择模型', 'Select model');
   const isStreaming = chat.isLoading || Boolean(chat.currentConversation?.messages.some((msg) => msg.isTyping));
 
-  const handleConversationSelect = (conversation: Conversation) => {
-    chat.handleConversationSelect(conversation);
+  const handleConversationSelect = useCallback((conversation: Conversation) => {
+    void selectConversation(conversation);
     closeSidebarOnNarrow();
-  };
+  }, [closeSidebarOnNarrow, selectConversation]);
 
-  const handleNewConversation = () => {
-    chat.createNewConversation();
+  const handleNewConversation = useCallback(() => {
+    startNewConversation();
     closeSidebarOnNarrow();
-  };
+  }, [closeSidebarOnNarrow, startNewConversation]);
+
+  const openTemplates = useCallback(() => {
+    window.dispatchEvent(new Event('chat:open-templates'));
+  }, []);
+
+  useEffect(() => {
+    const handleShortcut = (event: globalThis.KeyboardEvent) => {
+      const commandKey = event.ctrlKey || event.metaKey;
+      if (commandKey && event.key.toLowerCase() === 'n') {
+        event.preventDefault();
+        handleNewConversation();
+      } else if (commandKey && event.key.toLowerCase() === 'k') {
+        event.preventDefault();
+        openTemplates();
+      } else if (event.key === 'Escape') {
+        setShowSidebar(false);
+        window.dispatchEvent(new Event('chat:close-overlays'));
+      }
+    };
+    window.addEventListener('keydown', handleShortcut);
+    return () => window.removeEventListener('keydown', handleShortcut);
+  }, [handleNewConversation, openTemplates, setShowSidebar]);
 
   const toggleMessageStyle = () => {
     const next = messageStyle === 'doc' ? 'bubble' : 'doc';
@@ -116,11 +152,10 @@ export default function Chat() {
         <OnmiTopBar
           sidebarOpen={showSidebar}
           onToggleSidebar={() => setShowSidebar((open) => !open)}
-          status={isStreaming ? 'STREAMING' : 'CONNECTED'}
           settingsHref="/settings"
           accountLabel={t('设置', 'Settings')}
           commandLabel={t('提示词模板', 'Templates')}
-          onCommand={() => chat.setInputMessage(PROMPT_TEMPLATES[0].text)}
+          onCommand={openTemplates}
           controls={
             <div className="onmi-top-controls">
               <ModelSelector
@@ -139,6 +174,11 @@ export default function Chat() {
           onConversationSelect={handleConversationSelect}
           onNewConversation={handleNewConversation}
           onClearAllConversations={chat.clearAllConversations}
+          onRenameConversation={chat.renameConversation}
+          onDeleteConversation={chat.deleteConversation}
+          loadState={chat.conversationsState}
+          loadError={chat.conversationsError}
+          onRetry={chat.retryConversations}
           formatTime={chat.formatTime}
         />
       }
@@ -162,8 +202,27 @@ export default function Chat() {
             messageStyle={messageStyle}
             onSuggestionClick={chat.setInputMessage}
             messagesEndRef={chat.messagesEndRef}
+            isLoading={chat.isConversationLoading}
+            loadError={chat.conversationLoadError}
+            onRetry={chat.retryCurrentConversation}
           />
         </div>
+
+        {!chat.providerReady && (
+          <div className="onmi-provider-onboarding" role="status">
+            <KeyRound size={14} />
+            <span>
+              {chat.providerConfigState === 'loading'
+                ? t('正在验证 Provider 配置...', 'Checking provider configuration...')
+                : chat.providerConfigState === 'error'
+                  ? (chat.providerConfigError || t('无法验证 Provider 配置。', 'Could not verify provider configuration.'))
+                  : chat.selectedModel
+                    ? t('所选 Provider 尚未配置可用凭证。', 'The selected provider does not have usable credentials yet.')
+                    : t('请先配置并选择一个 Provider 模型后再发送消息。', 'Configure a provider and choose a model before sending a message.')}
+            </span>
+            <Link to="/settings">{t('打开 API 设置', 'Open API settings')}</Link>
+          </div>
+        )}
 
         <ChatComposer
           inputMessage={chat.inputMessage}
@@ -178,6 +237,7 @@ export default function Chat() {
           onParametersChange={chat.setAiParameters}
           onStop={chat.stopGeneration}
           onTemplateSelect={chat.setInputMessage}
+          providerReady={chat.providerReady}
         />
       </div>
     </OnmiPageShell>
@@ -189,7 +249,12 @@ interface ChatSidebarProps {
   currentConversation: Conversation | null;
   onConversationSelect: (conversation: Conversation) => void;
   onNewConversation: () => void;
-  onClearAllConversations?: () => void;
+  onClearAllConversations: () => Promise<void>;
+  onRenameConversation: (conversationId: string, title: string) => Promise<void>;
+  onDeleteConversation: (conversationId: string) => Promise<void>;
+  loadState: 'loading' | 'ready' | 'error';
+  loadError: string | null;
+  onRetry: () => Promise<void>;
   formatTime: (date: Date) => string;
 }
 
@@ -199,18 +264,62 @@ function ChatSidebar({
   onConversationSelect,
   onNewConversation,
   onClearAllConversations,
+  onRenameConversation,
+  onDeleteConversation,
+  loadState,
+  loadError,
+  onRetry,
   formatTime,
 }: ChatSidebarProps) {
   const t = useCopy();
   const user = useAuthStore((state) => state.user);
-  const logout = useAuthStore((state) => state.logout);
+  const logoutUser = useAuthStore((state) => state.logoutUser);
   const initials = getInitials(user?.displayName || user?.username || 'YS');
+  const [searchQuery, setSearchQuery] = useState('');
+  const deferredSearchQuery = useDeferredValue(searchQuery.trim().toLowerCase());
+  const [isClearing, setIsClearing] = useState(false);
+  const visibleConversations = useMemo(() => (
+    deferredSearchQuery
+      ? conversations.filter((conversation) => conversation.title.toLowerCase().includes(deferredSearchQuery))
+      : conversations
+  ), [conversations, deferredSearchQuery]);
 
-  const clearAll = () => {
-    if (!onClearAllConversations || conversations.length === 0) return;
+  const clearAll = async () => {
+    if (conversations.length === 0 || isClearing) return;
     const ok = window.confirm(t('清空全部会话？此操作不可撤销。', 'Clear all sessions? This cannot be undone.'));
-    if (ok) {
-      onClearAllConversations();
+    if (!ok) return;
+    setIsClearing(true);
+    try {
+      await onClearAllConversations();
+      toast.success(t('全部会话已清空', 'All sessions cleared'));
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : t('清空会话失败', 'Failed to clear sessions'));
+    } finally {
+      setIsClearing(false);
+    }
+  };
+
+  const rename = async (conversation: Conversation) => {
+    const title = window.prompt(
+      t('输入新的会话标题（最多 120 个字符）', 'Enter a new session title (120 characters max)'),
+      conversation.title,
+    );
+    if (title === null || title.trim() === conversation.title) return;
+    try {
+      await onRenameConversation(conversation.id, title);
+      toast.success(t('会话已重命名', 'Session renamed'));
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : t('重命名失败', 'Rename failed'));
+    }
+  };
+
+  const remove = async (conversation: Conversation) => {
+    if (!window.confirm(t('删除这个会话？此操作不可撤销。', 'Delete this session? This cannot be undone.'))) return;
+    try {
+      await onDeleteConversation(conversation.id);
+      toast.success(t('会话已删除', 'Session deleted'));
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : t('删除失败', 'Delete failed'));
     }
   };
 
@@ -225,43 +334,72 @@ function ChatSidebar({
         </button>
       </div>
 
+      <label className="onmi-session-search">
+        <Search size={12} />
+        <span className="sr-only">{t('搜索会话', 'Search sessions')}</span>
+        <input
+          type="search"
+          value={searchQuery}
+          onChange={(event) => setSearchQuery(event.target.value)}
+          placeholder={t('搜索会话...', 'Search sessions...')}
+        />
+      </label>
+
       <div className="onmi-session-table-head">
         <span>PID</span>
         <span>SESSION</span>
         <span>MSG</span>
-        <button type="button" onClick={clearAll} title={t('清空会话', 'Clear sessions')}>
+        <button type="button" onClick={() => void clearAll()} disabled={isClearing || conversations.length === 0} title={t('清空会话', 'Clear sessions')}>
           <Trash2 size={11} />
         </button>
       </div>
 
       <div className="onmi-session-list onmi-scroll">
-        {conversations.length === 0 ? (
+        {loadState === 'loading' && conversations.length === 0 ? (
+          <div className="onmi-session-empty" role="status">
+            <RefreshCw size={18} className="animate-spin" />
+            <span>{t('正在加载会话...', 'Loading sessions...')}</span>
+          </div>
+        ) : loadState === 'error' ? (
+          <div className="onmi-session-empty onmi-session-error" role="alert">
+            <AlertTriangle size={20} />
+            <span>{loadError || t('会话加载失败', 'Failed to load sessions')}</span>
+            <button type="button" className="onmi-btn ghost" onClick={() => void onRetry()}>
+              <RefreshCw size={11} /> {t('重试', 'Retry')}
+            </button>
+          </div>
+        ) : visibleConversations.length === 0 ? (
           <div className="onmi-session-empty">
             <MessageSquare size={22} />
-            <span>{t('暂无会话记录', 'No sessions yet')}</span>
+            <span>{searchQuery ? t('没有匹配的会话', 'No matching sessions') : t('暂无会话记录', 'No sessions yet')}</span>
           </div>
         ) : (
-          conversations.map((conversation, index) => {
+          visibleConversations.map((conversation, index) => {
             const active = currentConversation?.id === conversation.id;
             return (
-              <button
-                type="button"
-                key={conversation.id}
-                className={cn('onmi-session-row', active && 'active')}
-                onClick={() => onConversationSelect(conversation)}
-              >
-                <span className="onmi-mono onmi-session-pid">{String(index).padStart(2, '0')}</span>
-                <span className="onmi-session-main">
-                  <span>
-                    <StatusDot state={active ? 'live' : 'off'} />
-                    <b>{conversation.title || t('未命名会话', 'Untitled session')}</b>
+              <div key={conversation.id} className={cn('onmi-session-row', active && 'active')}>
+                <button type="button" className="onmi-session-select" onClick={() => onConversationSelect(conversation)}>
+                  <span className="onmi-mono onmi-session-pid">{String(index).padStart(2, '0')}</span>
+                  <span className="onmi-session-main">
+                    <span>
+                      <StatusDot state={active ? 'ok' : 'off'} />
+                      <b>{conversation.title || t('未命名会话', 'Untitled session')}</b>
+                    </span>
+                    <small className="onmi-mono">
+                      {(conversation.provider || t('未知', 'unknown')).toUpperCase()} · {formatTime(conversation.created_at)}
+                    </small>
                   </span>
-                  <small className="onmi-mono">
-                    {(conversation.provider || 'openai').toUpperCase()} · {formatTime(conversation.created_at)}
-                  </small>
+                  <span className="onmi-mono onmi-session-count">{conversation.messages?.length || 0}</span>
+                </button>
+                <span className="onmi-session-actions">
+                  <button type="button" onClick={() => void rename(conversation)} title={t('重命名', 'Rename')} aria-label={t('重命名会话', 'Rename session')}>
+                    <Pencil size={11} />
+                  </button>
+                  <button type="button" onClick={() => void remove(conversation)} title={t('删除', 'Delete')} aria-label={t('删除会话', 'Delete session')}>
+                    <Trash2 size={11} />
+                  </button>
                 </span>
-                <span className="onmi-mono onmi-session-count">{conversation.messages?.length || 0}</span>
-              </button>
+              </div>
             );
           })
         )}
@@ -285,9 +423,9 @@ function ChatSidebar({
           <div className="onmi-user-avatar onmi-mono">{initials}</div>
           <div>
             <strong>{user?.displayName || user?.username || 'yspritan'}</strong>
-            <span className="onmi-mono">localhost:5173 · v0.4.2</span>
+            <span className="onmi-mono">{t('本地服务 · 自托管', 'local server · self-hosted')}</span>
           </div>
-          <button type="button" className="onmi-icon-button" onClick={logout} title={t('退出', 'Log out')}>
+          <button type="button" className="onmi-icon-button" onClick={() => void logoutUser()} title={t('退出', 'Log out')} aria-label={t('退出', 'Log out')}>
             <LogOut size={13} />
           </button>
         </div>
@@ -319,6 +457,7 @@ function ChatSessionHeader({
 }: ChatSessionHeaderProps) {
   const t = useCopy();
   const messageCount = conversation?.messages.length || 0;
+  const providerLabel = provider ? getProviderName(provider) : t('未选择', 'not selected');
   const tokenEstimate = useMemo(() => {
     const chars = conversation?.messages.reduce((sum, msg) => sum + String(msg.content || '').length, 0) || 0;
     return Math.max(0, Math.round(chars / 4));
@@ -331,7 +470,7 @@ function ChatSessionHeader({
           <span className="onmi-section-label">SESS · {conversation ? conversation.id.slice(0, 4).toUpperCase() : 'NEW'}</span>
           <h1>{conversation?.title || t('新的 ONMI 会话', 'New ONMI session')}</h1>
           <p className="onmi-mono">
-            {messageCount} messages · context {tokenEstimate.toLocaleString()} tok · provider {getProviderName(provider)} · {modelLabel} · {isStreaming ? 'streaming' : 'ready'}
+            {messageCount} messages · context {tokenEstimate.toLocaleString()} tok · provider {providerLabel} · {modelLabel} · {isStreaming ? 'streaming' : 'ready'}
           </p>
         </div>
       </div>
@@ -340,10 +479,10 @@ function ChatSessionHeader({
           <SlidersHorizontal size={12} />
           {messageStyle === 'doc' ? t('文档流', 'Document') : t('气泡', 'Bubble')}
         </button>
-        <button type="button" className="onmi-btn ghost" onClick={onExportCurrent} disabled={!conversation || messageCount === 0} title={t('导出当前会话', 'Export current session')}>
+        <button type="button" className="onmi-btn ghost" onClick={onExportCurrent} disabled={!conversation || messageCount === 0} title={t('导出当前会话', 'Export current session')} aria-label={t('导出当前会话', 'Export current session')}>
           <Download size={12} />
         </button>
-        <button type="button" className="onmi-btn ghost" onClick={onForkCurrent} disabled={!conversation} title={t('分叉当前会话', 'Fork current session')}>
+        <button type="button" className="onmi-btn ghost" onClick={onForkCurrent} disabled={!conversation || conversation.persisted === false} title={t('分叉当前会话', 'Fork current session')} aria-label={t('分叉当前会话', 'Fork current session')}>
           <RefreshCw size={12} />
         </button>
       </div>
@@ -357,6 +496,9 @@ interface ChatMessagesProps {
   messageStyle: 'doc' | 'bubble';
   onSuggestionClick: (text: string) => void;
   messagesEndRef: RefObject<HTMLDivElement | null>;
+  isLoading: boolean;
+  loadError: string | null;
+  onRetry: () => void;
 }
 
 function ChatMessages({
@@ -365,10 +507,35 @@ function ChatMessages({
   messageStyle,
   onSuggestionClick,
   messagesEndRef,
+  isLoading,
+  loadError,
+  onRetry,
 }: ChatMessagesProps) {
   const t = useCopy();
   const user = useAuthStore((state) => state.user);
   const initials = getInitials(user?.displayName || user?.username || 'YS');
+
+  if (isLoading) {
+    return (
+      <div className="onmi-chat-state" role="status">
+        <RefreshCw size={18} className="animate-spin" />
+        <span>{t('正在加载会话消息...', 'Loading session messages...')}</span>
+      </div>
+    );
+  }
+
+  if (loadError && (!currentConversation || currentConversation.messages.length === 0)) {
+    return (
+      <div className="onmi-chat-state error" role="alert">
+        <AlertTriangle size={20} />
+        <strong>{t('无法打开此会话', 'Could not open this session')}</strong>
+        <span>{loadError}</span>
+        <button type="button" className="onmi-btn" onClick={onRetry}>
+          <RefreshCw size={11} /> {t('重试', 'Retry')}
+        </button>
+      </div>
+    );
+  }
 
   if (!currentConversation || currentConversation.messages.length === 0) {
     const suggestions = [
@@ -396,6 +563,13 @@ function ChatMessages({
 
   return (
     <div className={cn('onmi-message-stack', messageStyle === 'bubble' && 'bubble-mode')}>
+      {loadError && (
+        <div className="onmi-inline-error" role="alert">
+          <AlertTriangle size={14} />
+          <span>{loadError}</span>
+          <button type="button" onClick={onRetry}>{t('重试', 'Retry')}</button>
+        </div>
+      )}
       {currentConversation.messages.map((message, index) => (
         <OnmiMessage
           key={message.id}
@@ -425,8 +599,8 @@ function OnmiMessage({ message, index, conversation, useResponsesAPI, initials, 
   const t = useCopy();
   const isUser = message.role === 'user';
   const content = typeof message.content === 'string' ? message.content : JSON.stringify(message.content);
-  const provider = conversation.provider || 'openai';
-  const model = conversation.model || getProviderName(provider);
+  const provider = conversation.provider || '';
+  const model = conversation.model || getProviderName(provider) || 'assistant';
 
   const copyMessage = async () => {
     await navigator.clipboard.writeText(content);
@@ -439,7 +613,7 @@ function OnmiMessage({ message, index, conversation, useResponsesAPI, initials, 
         <div className="onmi-message-gutter">
           <span className="onmi-mono">{String(index).padStart(2, '0')}</span>
           {isUser ? <span className="onmi-message-avatar onmi-mono">{initials}</span> : <ProviderGlyph provider={provider} size={24} />}
-          {!isUser && message.isTyping && <span className="onmi-mono onmi-mini-live">LIVE</span>}
+          {!isUser && message.isTyping && <span className="onmi-mono onmi-mini-live">STREAM</span>}
         </div>
       )}
       <div className="onmi-message-body">
@@ -463,10 +637,16 @@ function OnmiMessage({ message, index, conversation, useResponsesAPI, initials, 
             )}
             {content ? (
               <MarkdownRenderer content={content} className="onmi-markdown" />
-            ) : (
+            ) : message.isTyping ? (
               <div className="onmi-loading-line">
                 <span className="onmi-caret" />
                 <span className="onmi-mono">{t('等待模型输出…', 'Waiting for model output...')}</span>
+              </div>
+            ) : null}
+            {message.error && (
+              <div className={cn('onmi-message-status', message.status === 'cancelled' ? 'cancelled' : 'error')} role="status">
+                <AlertTriangle size={13} />
+                <span>{message.error}</span>
               </div>
             )}
             {message.isTyping && content && <span className="onmi-caret" />}
@@ -477,7 +657,7 @@ function OnmiMessage({ message, index, conversation, useResponsesAPI, initials, 
 
         {!message.isTyping && !isUser && (
           <div className="onmi-message-actions">
-            <button type="button" className="onmi-btn ghost" onClick={copyMessage}>
+            <button type="button" className="onmi-btn ghost" onClick={copyMessage} disabled={!content}>
               <Copy size={11} />
               {t('复制', 'Copy')}
             </button>
@@ -492,7 +672,7 @@ interface ChatComposerProps {
   inputMessage: string;
   setInputMessage: (message: string) => void;
   onSend: () => void;
-  onKeyDown: (event: KeyboardEvent) => void;
+  onKeyDown: (event: ReactKeyboardEvent) => void;
   isLoading: boolean;
   currentConversation: Conversation | null;
   textareaRef: RefObject<HTMLTextAreaElement | null>;
@@ -501,6 +681,7 @@ interface ChatComposerProps {
   onParametersChange: AIParametersPanelProps['onParametersChange'];
   onStop: () => void;
   onTemplateSelect: (message: string) => void;
+  providerReady: boolean;
 }
 
 function ChatComposer({
@@ -516,10 +697,39 @@ function ChatComposer({
   onParametersChange,
   onStop,
   onTemplateSelect,
+  providerReady,
 }: ChatComposerProps) {
   const t = useCopy();
   const [showTemplates, setShowTemplates] = useState(false);
-  const isDisabled = !inputMessage.trim() || isLoading || (currentConversation?.messages.some((message) => message.isTyping) ?? false);
+  const isDisabled = !providerReady || !inputMessage.trim() || isLoading || (currentConversation?.messages.some((message) => message.isTyping) ?? false);
+
+  useEffect(() => {
+    const open = () => {
+      setShowTemplates(true);
+      queueMicrotask(() => textareaRef.current?.focus());
+    };
+    const close = () => setShowTemplates(false);
+    window.addEventListener('chat:open-templates', open);
+    window.addEventListener('chat:close-overlays', close);
+    return () => {
+      window.removeEventListener('chat:open-templates', open);
+      window.removeEventListener('chat:close-overlays', close);
+    };
+  }, [textareaRef]);
+
+  const handleComposerKeyDown = (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key === '/' && inputMessage.length === 0) {
+      event.preventDefault();
+      setShowTemplates(true);
+      return;
+    }
+    if (event.key === 'Escape' && showTemplates) {
+      event.preventDefault();
+      setShowTemplates(false);
+      return;
+    }
+    onKeyDown(event);
+  };
 
   return (
     <section className="onmi-composer brk">
@@ -527,10 +737,11 @@ function ChatComposer({
         ref={textareaRef as RefObject<HTMLTextAreaElement>}
         value={inputMessage}
         onChange={(event) => setInputMessage(event.target.value)}
-        onKeyDown={onKeyDown}
+        onKeyDown={handleComposerKeyDown}
         rows={1}
         placeholder={t('继续追问，或按 / 切换提示词模板…', 'Ask anything, or press / for prompt templates...')}
         className="onmi-composer-input onmi-scroll"
+        aria-label={t('聊天消息', 'Chat message')}
       />
       <div className="onmi-composer-toolbar">
         <div className="onmi-template-picker">
@@ -539,16 +750,19 @@ function ChatComposer({
             className="onmi-btn ghost onmi-tool-button"
             title={t('提示词模板', 'Prompt templates')}
             onClick={() => setShowTemplates((open) => !open)}
+            aria-expanded={showTemplates}
+            aria-haspopup="menu"
           >
             <Wand2 size={12} />
             <span className="onmi-toolbar-label">{t('模板', 'Templates')}</span>
           </button>
           {showTemplates && (
-            <div className="onmi-template-menu">
+            <div className="onmi-template-menu" role="menu">
               {PROMPT_TEMPLATES.map((template) => (
                 <button
                   key={template.label}
                   type="button"
+                  role="menuitem"
                   onClick={() => {
                     onTemplateSelect(template.text);
                     setShowTemplates(false);
@@ -571,7 +785,13 @@ function ChatComposer({
         </div>
         <div className="onmi-composer-spacer" />
         <span className="onmi-mono onmi-composer-count">{inputMessage.length} / 8,192</span>
-        <button type="button" className={cn('onmi-btn primary', isLoading && 'stop')} disabled={!isLoading && isDisabled} onClick={isLoading ? onStop : onSend}>
+        <button
+          type="button"
+          className={cn('onmi-btn primary', isLoading && 'stop')}
+          disabled={!isLoading && isDisabled}
+          onClick={isLoading ? onStop : onSend}
+          title={!providerReady ? t('请先配置 Provider', 'Configure a provider first') : undefined}
+        >
           {isLoading ? <Square size={12} /> : <Send size={12} />}
           <span className="onmi-send-label">{isLoading ? t('停止', 'Stop') : t('发送', 'Send')}</span>
           {!isLoading && <kbd>Enter</kbd>}
@@ -612,6 +832,10 @@ function buildTranscriptMarkdown(conversation: Conversation) {
       message.content || '_No content_',
       ''
     );
+
+    if (message.status === 'error' || message.status === 'cancelled') {
+      lines.push(`_Local response status: ${message.status}. This response is not part of saved model context._`, '');
+    }
 
     if (message.hasThinking && message.thinkingContent) {
       lines.push('<details>', '<summary>Thinking</summary>', '', message.thinkingContent, '', '</details>', '');

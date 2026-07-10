@@ -32,28 +32,25 @@ class GeminiDataUpdater {
       console.log('请在 .env 文件中设置 GEMINI_API_KEY');
       process.exit(1);
     }
-    console.log('✅ API Key已设置，开始测试...');
-    console.log('API Key长度:', this.apiKey.length);
-    console.log('API Key前缀:', this.apiKey.substring(0, 10) + '...');
-    console.log('Base URL:', CONFIG.baseUrl);
+    console.log('✅ API Key已配置，开始测试...');
   }
 
   async fetchModels() {
     console.log('🔍 获取Gemini模型列表...');
     
     const url = `${CONFIG.baseUrl}/models?key=${this.apiKey}`;
-    console.log('请求URL:', url.replace(this.apiKey, '***'));
     
     try {
-      // 使用 Node.js 内置的 fetch (Node 18+) 或者 node-fetch
-      const fetch = globalThis.fetch || require('node-fetch');
+      // Node.js 20+ provides fetch globally.
+      const fetch = globalThis.fetch;
       const response = await fetch(url);
       
       console.log('响应状态:', response.status, response.statusText);
       
       if (!response.ok) {
-        const errorText = await response.text();
-        console.error('API错误响应:', errorText);
+        // Provider error bodies may echo request metadata. Keep diagnostics
+        // limited to the already logged status and never print credentials.
+        await response.body?.cancel().catch(() => undefined);
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
       }
       

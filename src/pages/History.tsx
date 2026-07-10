@@ -1,6 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Search, MessageSquare, Trash2, Calendar, ArrowLeft, ExternalLink } from 'lucide-react';
+import { Search, MessageSquare, Trash2, Calendar, ArrowLeft, ExternalLink, AlertTriangle, RefreshCw } from 'lucide-react';
 import { toast } from 'sonner';
 import { useTranslation } from 'react-i18next';
 import { fetchWithAuth } from '../lib/fetch';
@@ -38,28 +38,30 @@ export default function History() {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [selectedConversations, setSelectedConversations] = useState<string[]>([]);
 
-  useEffect(() => {
-    loadConversations();
-  }, []);
-
-  const loadConversations = async () => {
+  const loadConversations = useCallback(async (signal?: AbortSignal) => {
     try {
       setIsLoading(true);
-      const response = await fetchWithAuth('/api/chat/conversations');
-      if (response.ok) {
-        const data = await response.json();
-        setConversations(data.conversations || data.data || []);
-      } else {
-        setConversations([]);
-      }
-    } catch {
-      setConversations([]);
+      setLoadError(null);
+      const response = await fetchWithAuth('/api/chat/conversations', { signal });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.success) throw new Error(data.error || t('history.loadFailed', { defaultValue: 'Failed to load conversation history' }));
+      setConversations(Array.isArray(data.conversations) ? data.conversations : Array.isArray(data.data) ? data.data : []);
+    } catch (error) {
+      if (signal?.aborted) return;
+      setLoadError(error instanceof Error ? error.message : t('history.loadFailed', { defaultValue: 'Failed to load conversation history' }));
     } finally {
-      setIsLoading(false);
+      if (!signal?.aborted) setIsLoading(false);
     }
-  };
+  }, [t]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void loadConversations(controller.signal);
+    return () => controller.abort();
+  }, [loadConversations]);
 
   const filteredConversations = conversations.filter(conv =>
     conv.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -202,6 +204,15 @@ export default function History() {
               </Card>
             ))}
           </div>
+        ) : loadError ? (
+          <div className="text-center py-16" role="alert">
+            <AlertTriangle className="mx-auto h-12 w-12 text-destructive/70" />
+            <h3 className="mt-3 text-sm font-medium text-foreground">{t('history.loadFailed', { defaultValue: 'Could not load conversation history' })}</h3>
+            <p className="mx-auto mt-1 max-w-md text-sm text-muted-foreground">{loadError}</p>
+            <Button className="mt-4" variant="outline" onClick={() => void loadConversations()}>
+              <RefreshCw className="mr-2 h-4 w-4" /> {t('common.retry', { defaultValue: 'Retry' })}
+            </Button>
+          </div>
         ) : filteredConversations.length === 0 ? (
           <div className="text-center py-16">
             <MessageSquare className="mx-auto h-12 w-12 text-muted-foreground/50" />
@@ -236,6 +247,10 @@ export default function History() {
                         type="checkbox"
                         checked={selectedConversations.includes(conversation.id)}
                         onChange={() => handleSelectConversation(conversation.id)}
+                        aria-label={t('history.selectConversation', {
+                          defaultValue: `Select ${conversation.title}`,
+                          title: conversation.title,
+                        })}
                         className="mt-1.5 h-4 w-4 rounded border-input"
                       />
                       <div
@@ -271,12 +286,24 @@ export default function History() {
                         size="icon"
                         className="h-8 w-8"
                         onClick={() => navigate(`/chat?conversation=${conversation.id}`)}
+                        aria-label={t('history.openConversation', {
+                          defaultValue: `Open ${conversation.title}`,
+                          title: conversation.title,
+                        })}
                       >
                         <ExternalLink className="h-3.5 w-3.5" />
                       </Button>
                       <AlertDialog>
                         <AlertDialogTrigger asChild>
-                          <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-destructive">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                            aria-label={t('history.deleteConversation', {
+                              defaultValue: `Delete ${conversation.title}`,
+                              title: conversation.title,
+                            })}
+                          >
                             <Trash2 className="h-3.5 w-3.5" />
                           </Button>
                         </AlertDialogTrigger>

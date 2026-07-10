@@ -9,6 +9,7 @@ import {
   AIServiceConfig,
   ThinkingResponse
 } from './types.js';
+import { getSafeErrorMessage } from './error-utils.js';
 
 /**
  * 思维链适配器接口
@@ -170,8 +171,11 @@ export abstract class BaseThinkingAdapter implements ThinkingAdapter {
    * 辅助方法：记录调试信息
    */
   protected log(message: string, data?: any): void {
-    if (data) {
-      console.log(`[${this.provider}ThinkingAdapter] ${message}`, data);
+    if (data !== undefined) {
+      const safeData = ['string', 'number', 'boolean'].includes(typeof data)
+        ? data
+        : '[details omitted]';
+      console.log(`[${this.provider}ThinkingAdapter] ${message}`, safeData);
     } else {
       console.log(`[${this.provider}ThinkingAdapter] ${message}`);
     }
@@ -182,7 +186,10 @@ export abstract class BaseThinkingAdapter implements ThinkingAdapter {
    */
   protected logError(message: string, error?: any): void {
     if (error) {
-      console.error(`[${this.provider}ThinkingAdapter] ${message}`, error);
+      console.error(
+        `[${this.provider}ThinkingAdapter] ${message}`,
+        getSafeErrorMessage(error)
+      );
     } else {
       console.error(`[${this.provider}ThinkingAdapter] ${message}`);
     }

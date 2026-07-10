@@ -1,5 +1,5 @@
 /**
- * JSON文件数据库适配器 - 完全替代Supabase的轻量级本地存储方案
+ * JSON 文件数据库适配器 - ONMI 的轻量级本地存储实现
  * 数据存储在本地JSON文件中，支持基本的CRUD操作
  * 
  * 特性:
@@ -11,8 +11,11 @@ import fs from 'fs/promises';
 import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import bcrypt from 'bcrypt';
+import { sanitizeErrorMessage } from './error-utils.js';
 
-interface User {
+export const CURRENT_DATABASE_VERSION = 3;
+
+export interface User {
   id: string;
   username: string;
   passwordHash: string;
@@ -30,7 +33,7 @@ interface ModelConfig {
   visible: boolean;
 }
 
-interface AIProvider {
+export interface AIProvider {
   id: string;
   user_id: string;
   provider_name: string;
@@ -41,9 +44,10 @@ interface AIProvider {
   is_active: boolean;
   created_at: string;
   updated_at: string;
+  [key: string]: unknown;
 }
 
-interface Conversation {
+export interface Conversation {
   id: string;
   user_id: string;
   title: string;
@@ -53,7 +57,7 @@ interface Conversation {
   updated_at: string;
 }
 
-interface Message {
+export interface Message {
   id: string;
   conversation_id: string;
   content: string;
@@ -73,12 +77,29 @@ interface Message {
   output_tokens?: number;           // 输出token数量
 }
 
-interface DatabaseSchema {
+export interface Session {
+  id: string;
+  user_id: string;
+  token_hash: string;
+  created_at: string;
+  expires_at: string;
+}
+
+export interface MigrationRecord {
+  version: number;
+  migrated_at: string;
+  description: string;
+}
+
+export interface DatabaseSchema {
   users: User[];
   ai_providers: AIProvider[];
   conversations: Conversation[];
   messages: Message[];
   custom_models: any[];
+  sessions: Session[];
+  db_version: number;
+  migrations: MigrationRecord[];
 }
 
 type ImportMergeMode = 'merge' | 'replace';
@@ -91,11 +112,136 @@ interface ImportStats {
   errors: number;
 }
 
-interface ImportPayload {
+export interface ImportPayload {
   version?: string;
   conversations?: Partial<Conversation>[];
   messages?: Partial<Message>[];
   aiProviders?: Partial<AIProvider>[];
+  metadata?: {
+    credentialsIncluded?: boolean;
+    [key: string]: unknown;
+  };
+}
+
+export interface PrepareChatTurnInput {
+  userId: string;
+  conversationId?: string;
+  title?: string;
+  message: {
+    content: string;
+    role: 'user';
+    provider?: string;
+    model?: string;
+  };
+}
+
+export interface DatabaseHealthReport {
+  dbVersion: number;
+  currentVersion: number;
+  pendingMigrations: number[];
+  migrationHistory: MigrationRecord[];
+  counts: {
+    users: number;
+    conversations: number;
+    messages: number;
+    aiProviders: number;
+  };
+  integrity: {
+    orphanMessages: number;
+    orphanConversations: number;
+    duplicateUsernames: number;
+    duplicateIds: number;
+  };
+  latestBackup: {
+    filename: string;
+    createdAt: string;
+    sizeBytes: number;
+  } | null;
+}
+
+function isNodeError(error: unknown): error is NodeJS.ErrnoException {
+  return error instanceof Error && 'code' in error;
+}
+
+function safeErrorMessage(error: unknown): string {
+  return sanitizeErrorMessage(error instanceof Error ? error.message : String(error));
+}
+
+function cloneDatabase(data: DatabaseSchema): DatabaseSchema {
+  return JSON.parse(JSON.stringify(data)) as DatabaseSchema;
+}
+
+function getLegacyDatabaseVersion(customModels: unknown[]): number {
+  const record = customModels.find((item) => {
+    return item &&
+      typeof item === 'object' &&
+      (item as { type?: unknown }).type === 'db_version';
+  }) as { version?: unknown } | undefined;
+  return typeof record?.version === 'number' && Number.isInteger(record.version)
+    ? record.version
+    : 1;
+}
+
+const CREDENTIAL_KEY_PATTERN = /^(?:api[_-]?key|access[_-]?token|refresh[_-]?token|token|secret|client[_-]?secret|password|authorization)$/i;
+const SUPPORTED_IMPORT_VERSIONS = new Set(['1.0', '2.0']);
+
+function stripCredentials(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(stripCredentials);
+  }
+  if (!value || typeof value !== 'object') {
+    return value;
+  }
+
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([key]) => !CREDENTIAL_KEY_PATTERN.test(key))
+      .map(([key, nestedValue]) => [key, stripCredentials(nestedValue)])
+  );
+}
+
+function containsCredentials(value: unknown): boolean {
+  if (Array.isArray(value)) {
+    return value.some(containsCredentials);
+  }
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+
+  return Object.entries(value).some(([key, nestedValue]) => {
+    if (CREDENTIAL_KEY_PATTERN.test(key)) {
+      return typeof nestedValue === 'string' && nestedValue.trim().length > 0;
+    }
+    return containsCredentials(nestedValue);
+  });
+}
+
+function countDuplicateValues(values: string[]): number {
+  const seen = new Set<string>();
+  const duplicates = new Set<string>();
+  for (const value of values) {
+    if (seen.has(value)) {
+      duplicates.add(value);
+    }
+    seen.add(value);
+  }
+  return duplicates.size;
+}
+
+function sanitizeProviderConfig(configData: Record<string, unknown>): Partial<AIProvider> {
+  const allowedFields = [
+    'api_key',
+    'base_url',
+    'available_models',
+    'default_model',
+    'is_active',
+    'use_responses_api'
+  ] as const;
+  return Object.fromEntries(
+    allowedFields
+      .filter((field) => Object.prototype.hasOwnProperty.call(configData, field))
+      .map((field) => [field, configData[field]])
+  ) as Partial<AIProvider>;
 }
 
 /**
@@ -103,8 +249,6 @@ interface ImportPayload {
  */
 class LockManager {
   private locks: Map<string, Promise<void>> = new Map();
-  private lockTimeouts: Map<string, NodeJS.Timeout> = new Map();
-  private readonly LOCK_TIMEOUT = 10000; // 10秒超时
 
   /**
    * 获取锁并执行操作
@@ -123,15 +267,6 @@ class LockManager {
     
     this.locks.set(key, lockPromise);
 
-    // 设置超时自动释放
-    const timeout = setTimeout(() => {
-      console.warn(`Lock timeout for key: ${key}`);
-      lockResolve();
-      this.releaseLock(key);
-    }, this.LOCK_TIMEOUT);
-    
-    this.lockTimeouts.set(key, timeout);
-
     try {
       // 执行操作
       const result = await operation();
@@ -148,11 +283,6 @@ class LockManager {
    * 释放锁
    */
   private releaseLock(key: string): void {
-    const timeout = this.lockTimeouts.get(key);
-    if (timeout) {
-      clearTimeout(timeout);
-      this.lockTimeouts.delete(key);
-    }
     this.locks.delete(key);
   }
 
@@ -160,18 +290,14 @@ class LockManager {
    * 清理所有锁（用于测试或重置）
    */
   clearAll(): void {
-    for (const timeout of this.lockTimeouts.values()) {
-      clearTimeout(timeout);
-    }
     this.locks.clear();
-    this.lockTimeouts.clear();
   }
 }
 
 /**
  * 数据库错误类型
  */
-class DatabaseError extends Error {
+export class DatabaseError extends Error {
   constructor(
     message: string,
     public code: string,
@@ -190,15 +316,20 @@ export class JSONDatabase {
   private cacheTimestamp: number = 0;
   private readonly CACHE_TTL = 1000; // 1秒缓存
 
-  constructor(dbPath = process.env.GEMINI_VIDEO_WEBUI_DB_PATH || path.join(process.cwd(), 'data', 'database.json')) {
-    // 数据文件存储在项目根目录的data文件夹中，可在测试中注入隔离路径
-    this.dbPath = dbPath;
+  constructor(dbPath?: string) {
+    // Resolve the singleton's environment-based path at init time. app.ts
+    // loads .env after ESM dependencies are instantiated, but before database
+    // initialization; resolving here would otherwise ignore a path from .env.
+    this.dbPath = dbPath || '';
     this.data = {
       users: [],
       ai_providers: [],
       conversations: [],
       messages: [],
-      custom_models: []
+      custom_models: [],
+      sessions: [],
+      db_version: CURRENT_DATABASE_VERSION,
+      migrations: []
     };
     this.lockManager = new LockManager();
   }
@@ -209,6 +340,10 @@ export class JSONDatabase {
   async init(): Promise<void> {
     return this.lockManager.withLock('init', async () => {
       try {
+        if (!this.dbPath) {
+          this.dbPath = process.env.GEMINI_VIDEO_WEBUI_DB_PATH
+            || path.join(process.cwd(), 'data', 'database.json');
+        }
         const dataDir = path.dirname(this.dbPath);
         
         // 创建data目录
@@ -221,14 +356,21 @@ export class JSONDatabase {
         // 检查数据库文件是否存在
         try {
           await fs.access(this.dbPath);
-          await this.loadData();
-        } catch {
-          // 文件不存在，创建初始数据
+        } catch (error) {
+          if (!isNodeError(error) || error.code !== 'ENOENT') {
+            throw error;
+          }
+
           await this.createInitialData();
           await this.saveData();
+          return;
         }
+
+        // Existing files must load successfully. Corrupt data is deliberately
+        // left untouched so startup can fail safely.
+        await this.loadData();
       } catch (error) {
-        console.error('Database initialization failed:', error);
+        console.error('Database initialization failed:', safeErrorMessage(error));
         throw new DatabaseError(
           'Failed to initialize database',
           'INIT_ERROR',
@@ -239,26 +381,19 @@ export class JSONDatabase {
   }
 
   /**
-   * 创建初始演示数据
+   * 创建空的当前版本数据库
    */
   private async createInitialData(): Promise<void> {
-    const now = new Date().toISOString();
-    const demoUserId = 'demo-user-001';
-    const demoPasswordHash = await bcrypt.hash('demo123', 10);
-
-    // 创建演示用户
-    this.data.users.push({
-      id: demoUserId,
-      username: 'demo_user',
-      passwordHash: demoPasswordHash,
-      displayName: '演示用户',
-      email: 'demo@example.com',
-      created_at: now,
-      updated_at: now,
-      last_login: now
-    });
-
-    // 不再创建默认的欢迎对话，保持干净的初始状态
+    this.data = {
+      users: [],
+      ai_providers: [],
+      conversations: [],
+      messages: [],
+      custom_models: [],
+      sessions: [],
+      db_version: CURRENT_DATABASE_VERSION,
+      migrations: []
+    };
   }
 
   /**
@@ -285,14 +420,25 @@ export class JSONDatabase {
         );
       }
       
-      this.data = parsedData;
-      this.dataCache = { ...parsedData };
+      const legacyVersion = getLegacyDatabaseVersion(parsedData.custom_models);
+      this.data = {
+        ...parsedData,
+        sessions: Array.isArray(parsedData.sessions) ? parsedData.sessions : [],
+        db_version: Number.isInteger(parsedData.db_version)
+          ? parsedData.db_version
+          : legacyVersion,
+        migrations: Array.isArray(parsedData.migrations) ? parsedData.migrations : []
+      };
+      this.dataCache = cloneDatabase(this.data);
       this.cacheTimestamp = now;
     } catch (error) {
       if (error instanceof DatabaseError) {
         throw error;
       }
-      console.error('Failed to load database:', error);
+      console.error(
+        'Failed to load database:',
+        error instanceof SyntaxError ? 'Database file contains invalid JSON' : safeErrorMessage(error)
+      );
       throw new DatabaseError(
         'Failed to load database file',
         'LOAD_ERROR',
@@ -304,15 +450,42 @@ export class JSONDatabase {
   /**
    * 验证数据库结构
    */
-  private validateDatabaseSchema(data: any): data is DatabaseSchema {
+  private validateDatabaseSchema(data: unknown): data is DatabaseSchema {
+    const candidate = data as Partial<DatabaseSchema> | null;
+    const sessionsValid = candidate?.sessions === undefined || (
+      Array.isArray(candidate.sessions) &&
+      candidate.sessions.every((session) => (
+        session &&
+        typeof session.id === 'string' &&
+        typeof session.user_id === 'string' &&
+        typeof session.token_hash === 'string' &&
+        /^[a-f0-9]{64}$/i.test(session.token_hash) &&
+        Number.isFinite(Date.parse(session.created_at)) &&
+        Number.isFinite(Date.parse(session.expires_at))
+      ))
+    );
+    const migrationsValid = candidate?.migrations === undefined || (
+      Array.isArray(candidate.migrations) &&
+      candidate.migrations.every((migration) => (
+        migration &&
+        Number.isInteger(migration.version) &&
+        typeof migration.description === 'string' &&
+        Number.isFinite(Date.parse(migration.migrated_at))
+      ))
+    );
     return (
-      data &&
-      typeof data === 'object' &&
-      Array.isArray(data.users) &&
-      Array.isArray(data.ai_providers) &&
-      Array.isArray(data.conversations) &&
-      Array.isArray(data.messages) &&
-      Array.isArray(data.custom_models)
+      candidate !== null &&
+      typeof candidate === 'object' &&
+      Array.isArray(candidate.users) &&
+      Array.isArray(candidate.ai_providers) &&
+      Array.isArray(candidate.conversations) &&
+      Array.isArray(candidate.messages) &&
+      Array.isArray(candidate.custom_models) &&
+      sessionsValid &&
+      (candidate.db_version === undefined || (
+        Number.isInteger(candidate.db_version) && candidate.db_version > 0
+      )) &&
+      migrationsValid
     );
   }
 
@@ -323,7 +496,7 @@ export class JSONDatabase {
     return this.lockManager.withLock('save', async () => {
       try {
         const tempPath = `${this.dbPath}.tmp`;
-        const backupPath = `${this.dbPath}.backup.${Date.now()}`;
+        const backupPath = this.getBackupPath('write');
         
         // 写入临时文件
         await fs.writeFile(tempPath, JSON.stringify(this.data, null, 2), 'utf-8');
@@ -340,26 +513,25 @@ export class JSONDatabase {
         
         // 备份现有文件（如果存在）
         try {
-          await fs.access(this.dbPath);
           await fs.copyFile(this.dbPath, backupPath);
-          
-          // 清理旧备份（保留最近5个）
           await this.cleanupOldBackups();
-        } catch {
-          // 文件不存在，跳过备份
+        } catch (error) {
+          if (!isNodeError(error) || error.code !== 'ENOENT') {
+            throw error;
+          }
         }
         
         // 原子性替换
         await fs.rename(tempPath, this.dbPath);
         
         // 更新缓存
-        this.dataCache = { ...this.data };
+        this.dataCache = cloneDatabase(this.data);
         this.cacheTimestamp = Date.now();
       } catch (error) {
         if (error instanceof DatabaseError) {
           throw error;
         }
-        console.error('Failed to save database:', error);
+        console.error('Failed to save database:', safeErrorMessage(error));
         throw new DatabaseError(
           'Failed to save database file',
           'SAVE_ERROR',
@@ -376,40 +548,405 @@ export class JSONDatabase {
     try {
       const dataDir = path.dirname(this.dbPath);
       const files = await fs.readdir(dataDir);
+      const backupPrefix = `${path.basename(this.dbPath)}.backup.`;
       const backupFiles = files
-        .filter(f => f.startsWith('database.json.backup.'))
+        .filter(f => f.startsWith(backupPrefix))
         .sort()
         .reverse();
-      
-      // 保留最近5个备份
-      const filesToDelete = backupFiles.slice(5);
+
+      // Keep migration snapshots in a separate retention bucket so routine
+      // chat writes cannot immediately rotate away the only pre-migration
+      // recovery point.
+      const migrationBackups = backupFiles.filter((file) => file.includes('.migration-v'));
+      const routineBackups = backupFiles.filter((file) => !file.includes('.migration-v'));
+      const filesToDelete = [
+        ...routineBackups.slice(5),
+        ...migrationBackups.slice(3)
+      ];
       for (const file of filesToDelete) {
         await fs.unlink(path.join(dataDir, file));
       }
     } catch (error) {
       // 清理失败不影响主流程
-      console.warn('Failed to cleanup old backups:', error);
+      console.warn('Failed to cleanup old backups:', safeErrorMessage(error));
     }
+  }
+
+  private getBackupPath(label: string): string {
+    const safeLabel = label.replace(/[^a-z0-9-]/gi, '-');
+    return `${this.dbPath}.backup.${Date.now()}.${safeLabel}`;
+  }
+
+  async createBackup(label = 'manual'): Promise<string> {
+    const backupPath = this.getBackupPath(label);
+    await fs.copyFile(this.dbPath, backupPath);
+    await this.cleanupOldBackups();
+    return backupPath;
   }
 
   /**
    * 公开的保存数据方法 - 用于手动触发数据保存
    */
   async save(): Promise<void> {
-    await this.saveData();
+    await this.lockManager.withLock('database-write', () => this.saveData());
+  }
+
+  getDatabaseVersion(): number {
+    return this.data.db_version;
+  }
+
+  getMigrationHistory(): MigrationRecord[] {
+    return this.data.migrations.map((migration) => ({ ...migration }));
+  }
+
+  async applyMigration(
+    version: number,
+    description: string,
+    migrate: (draft: DatabaseSchema) => void
+  ): Promise<boolean> {
+    return this.lockManager.withLock('database-write', async () => {
+      if (this.data.db_version >= version) {
+        return false;
+      }
+
+      await this.createBackup(`migration-v${version}`);
+      const original = cloneDatabase(this.data);
+
+      try {
+        const draft = cloneDatabase(this.data);
+        migrate(draft);
+        draft.db_version = version;
+        draft.migrations.push({
+          version,
+          migrated_at: new Date().toISOString(),
+          description
+        });
+        this.data = draft;
+        await this.saveData();
+        return true;
+      } catch (error) {
+        this.restoreData(original);
+        throw error;
+      }
+    });
+  }
+
+  async createPersistentSession(
+    userId: string,
+    tokenHash: string,
+    expiresAt: string
+  ): Promise<Session> {
+    return this.lockManager.withLock('database-write', async () => {
+      const original = cloneDatabase(this.data);
+      try {
+        const userExists = this.data.users.some((user) => user.id === userId);
+        if (!userExists) {
+          throw new DatabaseError('User not found', 'NOT_FOUND');
+        }
+        if (!/^[a-f0-9]{64}$/i.test(tokenHash)) {
+          throw new DatabaseError('Invalid session token hash', 'INVALID_PARAM');
+        }
+        if (!Number.isFinite(Date.parse(expiresAt))) {
+          throw new DatabaseError('Invalid session expiry', 'INVALID_PARAM');
+        }
+
+        const now = new Date().toISOString();
+        this.data.sessions = this.data.sessions.filter(
+          (session) => Date.parse(session.expires_at) > Date.now()
+        );
+
+        if (this.data.sessions.some((session) => session.token_hash === tokenHash)) {
+          throw new DatabaseError('Session token already exists', 'DUPLICATE_ID');
+        }
+
+        const session: Session = {
+          id: this.generateUniqueId(this.data.sessions),
+          user_id: userId,
+          token_hash: tokenHash,
+          created_at: now,
+          expires_at: expiresAt
+        };
+        this.data.sessions.push(session);
+        await this.saveData();
+        return { ...session };
+      } catch (error) {
+        this.restoreData(original);
+        throw error;
+      }
+    });
+  }
+
+  async findValidSessionByTokenHash(tokenHash: string): Promise<Session | null> {
+    const session = this.data.sessions.find((item) => item.token_hash === tokenHash);
+    if (!session) {
+      return null;
+    }
+
+    if (Date.parse(session.expires_at) <= Date.now()) {
+      await this.deleteSessionById(session.id);
+      return null;
+    }
+
+    const userExists = this.data.users.some((user) => user.id === session.user_id);
+    if (!userExists) {
+      return null;
+    }
+
+    return { ...session };
+  }
+
+  async deleteSessionById(sessionId: string): Promise<boolean> {
+    return this.lockManager.withLock('database-write', async () => {
+      const original = cloneDatabase(this.data);
+      const originalLength = this.data.sessions.length;
+      this.data.sessions = this.data.sessions.filter((session) => session.id !== sessionId);
+      if (this.data.sessions.length === originalLength) {
+        return false;
+      }
+      try {
+        await this.saveData();
+        return true;
+      } catch (error) {
+        this.restoreData(original);
+        throw error;
+      }
+    });
+  }
+
+  async deleteSessionByTokenHash(tokenHash: string): Promise<boolean> {
+    return this.lockManager.withLock('database-write', async () => {
+      const original = cloneDatabase(this.data);
+      const originalLength = this.data.sessions.length;
+      this.data.sessions = this.data.sessions.filter(
+        (session) => session.token_hash !== tokenHash
+      );
+      if (this.data.sessions.length === originalLength) {
+        return false;
+      }
+      try {
+        await this.saveData();
+        return true;
+      } catch (error) {
+        this.restoreData(original);
+        throw error;
+      }
+    });
+  }
+
+  async prepareChatTurn(input: PrepareChatTurnInput): Promise<{
+    conversation: Conversation;
+    message: Message;
+  }> {
+    return this.lockManager.withLock('database-write', async () => {
+      const { userId, conversationId, message } = input;
+      if (!userId || !message || message.role !== 'user' || !message.content?.trim()) {
+        throw new DatabaseError('Invalid chat turn', 'INVALID_PARAM');
+      }
+      if (!this.data.users.some((user) => user.id === userId)) {
+        throw new DatabaseError('User not found', 'NOT_FOUND');
+      }
+
+      const original = cloneDatabase(this.data);
+      try {
+        const now = new Date().toISOString();
+        let conversation: Conversation;
+
+        if (conversationId) {
+          const existing = this.data.conversations.find((item) => item.id === conversationId);
+          if (!existing) {
+            throw new DatabaseError('Conversation not found', 'NOT_FOUND');
+          }
+          if (existing.user_id !== userId) {
+            throw new DatabaseError('Conversation belongs to another user', 'FORBIDDEN');
+          }
+          conversation = existing;
+        } else {
+          conversation = {
+            id: this.generateUniqueId(this.data.conversations),
+            user_id: userId,
+            title: input.title?.trim().slice(0, 120) || message.content.trim().slice(0, 60),
+            provider_used: message.provider,
+            model_used: message.model,
+            created_at: now,
+            updated_at: now
+          };
+          this.data.conversations.push(conversation);
+        }
+
+        const userMessage: Message = {
+          id: this.generateUniqueId(this.data.messages),
+          conversation_id: conversation.id,
+          content: message.content,
+          role: 'user',
+          provider: message.provider,
+          model: message.model,
+          created_at: now,
+          updated_at: now
+        };
+        this.data.messages.push(userMessage);
+        conversation.updated_at = now;
+        conversation.provider_used = message.provider || conversation.provider_used;
+        conversation.model_used = message.model || conversation.model_used;
+
+        await this.saveData();
+        return {
+          conversation: { ...conversation },
+          message: { ...userMessage }
+        };
+      } catch (error) {
+        this.restoreData(original);
+        if (
+          error instanceof DatabaseError &&
+          ['INVALID_PARAM', 'NOT_FOUND', 'FORBIDDEN'].includes(error.code)
+        ) {
+          throw error;
+        }
+        throw new DatabaseError('Failed to prepare chat turn', 'WRITE_ERROR', error);
+      }
+    });
+  }
+
+  async exportUserData(userId: string, includeCredentials = false) {
+    const user = this.data.users.find((item) => item.id === userId);
+    if (!user) {
+      throw new DatabaseError('User not found', 'NOT_FOUND');
+    }
+
+    const conversations = this.data.conversations
+      .filter((conversation) => conversation.user_id === userId)
+      .map((conversation) => ({ ...conversation }));
+    const conversationIds = new Set(conversations.map((conversation) => conversation.id));
+    const messages = this.data.messages
+      .filter((message) => conversationIds.has(message.conversation_id))
+      .map((message) => ({ ...message }));
+    const providers = this.data.ai_providers
+      .filter((provider) => provider.user_id === userId)
+      .map((provider) => {
+        const clone = { ...provider };
+        return includeCredentials ? clone : stripCredentials(clone) as AIProvider;
+      });
+
+    return {
+      version: '2.0',
+      exportDate: new Date().toISOString(),
+      user: {
+        id: user.id,
+        username: user.username,
+        displayName: user.displayName,
+        email: user.email,
+        created_at: user.created_at
+      },
+      conversations,
+      messages,
+      aiProviders: providers,
+      metadata: {
+        totalConversations: conversations.length,
+        totalMessages: messages.length,
+        totalAIProviders: providers.length,
+        credentialsIncluded: includeCredentials
+      }
+    };
+  }
+
+  async getHealthReport(
+    currentVersion = CURRENT_DATABASE_VERSION
+  ): Promise<DatabaseHealthReport> {
+    const userIds = new Set(this.data.users.map((user) => user.id));
+    const conversationIds = new Set(this.data.conversations.map((conversation) => conversation.id));
+    const duplicateUsernames = countDuplicateValues(
+      this.data.users.map((user) => user.username.toLocaleLowerCase())
+    );
+    const duplicateIds = [
+      this.data.users,
+      this.data.ai_providers,
+      this.data.conversations,
+      this.data.messages,
+      this.data.sessions
+    ].reduce((total, records) => total + countDuplicateValues(records.map((item) => item.id)), 0);
+
+    return {
+      dbVersion: this.data.db_version,
+      currentVersion,
+      pendingMigrations: Array.from(
+        { length: Math.max(0, currentVersion - this.data.db_version) },
+        (_, index) => this.data.db_version + index + 1
+      ),
+      migrationHistory: this.getMigrationHistory(),
+      counts: {
+        users: this.data.users.length,
+        conversations: this.data.conversations.length,
+        messages: this.data.messages.length,
+        aiProviders: this.data.ai_providers.length
+      },
+      integrity: {
+        orphanMessages: this.data.messages.filter(
+          (message) => !conversationIds.has(message.conversation_id)
+        ).length,
+        orphanConversations: this.data.conversations.filter(
+          (conversation) => !userIds.has(conversation.user_id)
+        ).length,
+        duplicateUsernames,
+        duplicateIds
+      },
+      latestBackup: await this.getLatestBackup()
+    };
+  }
+
+  private restoreData(snapshot: DatabaseSchema): void {
+    this.data = snapshot;
+    this.dataCache = cloneDatabase(snapshot);
+    this.cacheTimestamp = Date.now();
+  }
+
+  private generateUniqueId(records: Array<{ id: string }>): string {
+    let id = uuidv4();
+    const ids = new Set(records.map((record) => record.id));
+    while (ids.has(id)) {
+      id = uuidv4();
+    }
+    return id;
+  }
+
+  private async getLatestBackup(): Promise<DatabaseHealthReport['latestBackup']> {
+    try {
+      const directory = path.dirname(this.dbPath);
+      const prefix = `${path.basename(this.dbPath)}.backup.`;
+      const files = (await fs.readdir(directory)).filter((file) => file.startsWith(prefix));
+      if (files.length === 0) {
+        return null;
+      }
+
+      const backups = await Promise.all(files.map(async (filename) => {
+        const stats = await fs.stat(path.join(directory, filename));
+        return { filename, stats };
+      }));
+      const latest = backups.sort((a, b) => b.stats.mtimeMs - a.stats.mtimeMs)[0];
+      return {
+        filename: latest.filename,
+        createdAt: latest.stats.mtime.toISOString(),
+        sizeBytes: latest.stats.size
+      };
+    } catch (error) {
+      if (isNodeError(error) && error.code === 'ENOENT') {
+        return null;
+      }
+      throw error;
+    }
   }
 
   /**
    * 清理所有对话和消息数据 - 保留用户和AI配置
    */
   async clearAllConversations(): Promise<void> {
-    return this.lockManager.withLock('clear', async () => {
+    return this.lockManager.withLock('database-write', async () => {
+      const original = cloneDatabase(this.data);
       try {
         this.data.conversations = [];
         this.data.messages = [];
         await this.saveData();
         console.log('已清理所有对话和消息数据');
       } catch (error) {
+        this.restoreData(original);
         throw new DatabaseError(
           'Failed to clear conversations',
           'CLEAR_ERROR',
@@ -419,8 +956,14 @@ export class JSONDatabase {
     });
   }
 
-  async importUserData(userId: string, importData: ImportPayload, mergeMode: ImportMergeMode = 'replace') {
-    return this.lockManager.withLock(`import-${userId}`, async () => {
+  async importUserData(
+    userId: string,
+    importData: ImportPayload,
+    mergeMode: ImportMergeMode = 'replace',
+    options: { allowCredentials?: boolean } = {}
+  ) {
+    return this.lockManager.withLock('database-write', async () => {
+      const original = cloneDatabase(this.data);
       try {
         if (!userId) {
           throw new DatabaseError('User ID is required', 'INVALID_PARAM');
@@ -439,8 +982,19 @@ export class JSONDatabase {
         const conversations = importData.conversations || [];
         const messages = importData.messages || [];
         const aiProviders = importData.aiProviders || [];
+        if (containsCredentials(aiProviders) && options.allowCredentials !== true) {
+          throw new DatabaseError(
+            'Credential import requires explicit confirmation',
+            'CREDENTIAL_CONFIRMATION_REQUIRED'
+          );
+        }
         const now = new Date().toISOString();
         const conversationIdMap = new Map<string, string>();
+        const existingCredentials = new Map(
+          this.data.ai_providers
+            .filter((provider) => provider.user_id === userId)
+            .map((provider) => [provider.provider_name, provider.api_key])
+        );
 
         const stats: ImportStats = {
           conversations: 0,
@@ -468,9 +1022,16 @@ export class JSONDatabase {
           );
         }
 
+        const reservedConversationIds = this.data.conversations.map(({ id }) => ({ id }));
+        const reservedMessageIds = this.data.messages.map(({ id }) => ({ id }));
+        const reservedProviderIds = this.data.ai_providers.map(({ id }) => ({ id }));
+
         for (const conversation of conversations) {
           const oldId = conversation.id!;
-          const newId = mergeMode === 'merge' ? uuidv4() : oldId;
+          const newId = mergeMode === 'merge'
+            ? this.generateUniqueId(reservedConversationIds)
+            : oldId;
+          reservedConversationIds.push({ id: newId });
           conversationIdMap.set(oldId, newId);
           this.data.conversations.push({
             id: newId,
@@ -486,8 +1047,12 @@ export class JSONDatabase {
 
         for (const message of messages) {
           const mappedConversationId = conversationIdMap.get(message.conversation_id!) || message.conversation_id!;
+          const messageId = mergeMode === 'merge'
+            ? this.generateUniqueId(reservedMessageIds)
+            : message.id!;
+          reservedMessageIds.push({ id: messageId });
           this.data.messages.push({
-            id: mergeMode === 'merge' ? uuidv4() : message.id!,
+            id: messageId,
             conversation_id: mappedConversationId,
             content: message.content!,
             role: message.role!,
@@ -507,15 +1072,24 @@ export class JSONDatabase {
         }
 
         for (const provider of aiProviders) {
+          const importedApiKey = Object.prototype.hasOwnProperty.call(provider, 'api_key')
+            ? provider.api_key
+            : existingCredentials.get(provider.provider_name!);
+          const useResponsesApi = provider.use_responses_api;
+          const providerId = mergeMode === 'merge'
+            ? this.generateUniqueId(reservedProviderIds)
+            : provider.id!;
+          reservedProviderIds.push({ id: providerId });
           this.data.ai_providers.push({
-            id: mergeMode === 'merge' ? uuidv4() : provider.id!,
+            id: providerId,
             user_id: userId,
             provider_name: provider.provider_name!,
-            api_key: provider.api_key,
+            api_key: importedApiKey,
             base_url: provider.base_url,
             available_models: Array.isArray(provider.available_models) ? provider.available_models : [],
             default_model: provider.default_model,
             is_active: provider.is_active ?? true,
+            ...(useResponsesApi !== undefined ? { use_responses_api: useResponsesApi } : {}),
             created_at: provider.created_at || now,
             updated_at: provider.updated_at || now
           });
@@ -525,7 +1099,8 @@ export class JSONDatabase {
         await this.saveData();
         return { data: stats, error: null };
       } catch (error) {
-        console.error('Failed to import user data:', error);
+        this.restoreData(original);
+        console.error('Failed to import user data:', safeErrorMessage(error));
         return {
           data: null,
           error: {
@@ -538,7 +1113,8 @@ export class JSONDatabase {
   }
 
   async clearConversationsByUserId(userId: string): Promise<void> {
-    return this.lockManager.withLock(`clear-${userId}`, async () => {
+    return this.lockManager.withLock('database-write', async () => {
+      const original = cloneDatabase(this.data);
       try {
         if (!userId) {
           throw new DatabaseError('User ID is required', 'INVALID_PARAM');
@@ -558,6 +1134,7 @@ export class JSONDatabase {
         );
         await this.saveData();
       } catch (error) {
+        this.restoreData(original);
         throw new DatabaseError(
           'Failed to clear user conversations',
           'CLEAR_ERROR',
@@ -568,7 +1145,8 @@ export class JSONDatabase {
   }
 
   async deleteConversationById(conversationId: string) {
-    return this.lockManager.withLock(`delete-conversation-${conversationId}`, async () => {
+    return this.lockManager.withLock('database-write', async () => {
+      const original = cloneDatabase(this.data);
       try {
         if (!conversationId) {
           throw new DatabaseError('Conversation ID is required', 'INVALID_PARAM');
@@ -605,7 +1183,8 @@ export class JSONDatabase {
           error: null
         };
       } catch (error) {
-        console.error('Failed to delete conversation:', error);
+        this.restoreData(original);
+        console.error('Failed to delete conversation:', safeErrorMessage(error));
         return {
           data: null,
           error: {
@@ -618,7 +1197,8 @@ export class JSONDatabase {
   }
 
   async forkConversationForUser(userId: string, conversationId: string) {
-    return this.lockManager.withLock(`fork-${conversationId}`, async () => {
+    return this.lockManager.withLock('database-write', async () => {
+      const original = cloneDatabase(this.data);
       try {
         if (!userId || !conversationId) {
           throw new DatabaseError('User ID and conversation ID are required', 'INVALID_PARAM');
@@ -641,7 +1221,7 @@ export class JSONDatabase {
         const now = new Date().toISOString();
         const forkedConversation = {
           ...conversation,
-          id: uuidv4(),
+          id: this.generateUniqueId(this.data.conversations),
           title: `${conversation.title || 'Untitled session'} (fork)`,
           created_at: now,
           updated_at: now
@@ -651,13 +1231,18 @@ export class JSONDatabase {
           .filter(message => message.conversation_id === conversationId)
           .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
 
-        const forkedMessages = sourceMessages.map(message => ({
-          ...message,
-          id: uuidv4(),
-          conversation_id: forkedConversation.id,
-          created_at: now,
-          updated_at: now
-        }));
+        const reservedMessageIds = this.data.messages.map(({ id }) => ({ id }));
+        const forkedMessages = sourceMessages.map((message) => {
+          const id = this.generateUniqueId(reservedMessageIds);
+          reservedMessageIds.push({ id });
+          return {
+            ...message,
+            id,
+            conversation_id: forkedConversation.id,
+            created_at: now,
+            updated_at: now
+          };
+        });
 
         this.data.conversations.push(forkedConversation);
         this.data.messages.push(...forkedMessages);
@@ -671,7 +1256,8 @@ export class JSONDatabase {
           error: null
         };
       } catch (error) {
-        console.error('Failed to fork conversation:', error);
+        this.restoreData(original);
+        console.error('Failed to fork conversation:', safeErrorMessage(error));
         return {
           data: null,
           error: {
@@ -689,8 +1275,13 @@ export class JSONDatabase {
     const messages = importData?.messages || [];
     const aiProviders = importData?.aiProviders || [];
 
-    if (!importData || typeof importData !== 'object' || !importData.version) {
-      errors.push('导入数据格式不正确');
+    if (
+      !importData ||
+      typeof importData !== 'object' ||
+      typeof importData.version !== 'string' ||
+      !SUPPORTED_IMPORT_VERSIONS.has(importData.version)
+    ) {
+      errors.push('Unsupported or invalid backup version');
     }
     if (!Array.isArray(conversations)) errors.push('conversations must be an array');
     if (!Array.isArray(messages)) errors.push('messages must be an array');
@@ -723,9 +1314,12 @@ export class JSONDatabase {
       importedConversationIds.add(conversation.id);
     }
 
-    const otherUserMessageIds = new Set(
+    // Replace mode removes only messages owned through this user's current
+    // conversations. Messages for other users and orphan messages are retained,
+    // so imported IDs must not collide with either group.
+    const retainedMessageIds = new Set(
       this.data.messages
-        .filter(message => otherUserConversationIds.has(message.conversation_id))
+        .filter(message => !ownedConversationIds.has(message.conversation_id))
         .map(message => message.id)
     );
     const importedMessageIds = new Set<string>();
@@ -741,8 +1335,8 @@ export class JSONDatabase {
         if (importedMessageIds.has(message.id)) {
           errors.push(`Duplicate imported message id: ${message.id}`);
         }
-        if (mergeMode === 'replace' && otherUserMessageIds.has(message.id)) {
-          errors.push(`Message ${message.id} conflicts with another user`);
+        if (mergeMode === 'replace' && retainedMessageIds.has(message.id)) {
+          errors.push(`Message ${message.id} conflicts with retained data`);
         }
         importedMessageIds.add(message.id);
       }
@@ -788,6 +1382,30 @@ export class JSONDatabase {
       if (typeof provider.provider_name !== 'string' || !provider.provider_name.trim()) {
         errors.push('Every imported provider must include provider_name');
       }
+      if (
+        Object.prototype.hasOwnProperty.call(provider, 'api_key') &&
+        typeof provider.api_key !== 'string'
+      ) {
+        errors.push(`Provider ${provider.id || '(unknown)'} has an invalid api_key`);
+      }
+      if (provider.base_url !== undefined && typeof provider.base_url !== 'string') {
+        errors.push(`Provider ${provider.id || '(unknown)'} has an invalid base_url`);
+      }
+      if (provider.default_model !== undefined && typeof provider.default_model !== 'string') {
+        errors.push(`Provider ${provider.id || '(unknown)'} has an invalid default_model`);
+      }
+      if (provider.available_models !== undefined && !Array.isArray(provider.available_models)) {
+        errors.push(`Provider ${provider.id || '(unknown)'} has invalid available_models`);
+      }
+      if (provider.is_active !== undefined && typeof provider.is_active !== 'boolean') {
+        errors.push(`Provider ${provider.id || '(unknown)'} has an invalid is_active flag`);
+      }
+      if (
+        provider.use_responses_api !== undefined &&
+        ![true, false, 'true', 'false'].includes(provider.use_responses_api as boolean | string)
+      ) {
+        errors.push(`Provider ${provider.id || '(unknown)'} has an invalid use_responses_api flag`);
+      }
     }
 
     return { valid: errors.length === 0, errors };
@@ -796,14 +1414,14 @@ export class JSONDatabase {
   // ============= 通用查询方法 =============
 
   /**
-   * 模拟Supabase的from().select()查询
+   * 提供链式 from().select() 查询接口
    */
-  from(table: keyof DatabaseSchema) {
+  from(table: Exclude<keyof DatabaseSchema, 'db_version'>) {
     return {
       select: (_fields: string = '*') => {
         try {
           // 返回数据的浅拷贝，避免外部修改影响内部数据
-          const data = this.data[table].map(item => ({ ...item }));
+          const data = (this.data[table] as any[]).map((item: any) => ({ ...item }));
           return {
             data,
             error: null
@@ -816,7 +1434,8 @@ export class JSONDatabase {
         }
       },
       insert: async (record: any) => {
-        return this.lockManager.withLock(`insert-${table}`, async () => {
+        return this.lockManager.withLock('database-write', async () => {
+          const original = cloneDatabase(this.data);
           try {
             // 验证记录
             if (!record || typeof record !== 'object') {
@@ -833,6 +1452,28 @@ export class JSONDatabase {
               created_at: now,
               updated_at: now
             };
+
+            if ((this.data[table] as Array<{ id?: string }>).some(
+              (item) => item.id === newRecord.id
+            )) {
+              throw new DatabaseError(
+                `Duplicate id in ${table}: ${newRecord.id}`,
+                'DUPLICATE_ID'
+              );
+            }
+
+            // Assistant persistence races with delete/clear operations. All
+            // of them share database-write, so this check prevents an
+            // upstream completion from recreating an orphan after its
+            // conversation was removed.
+            if (table === 'messages' && newRecord.role === 'assistant') {
+              const conversationId = typeof newRecord.conversation_id === 'string'
+                ? newRecord.conversation_id
+                : '';
+              if (!this.data.conversations.some((conversation) => conversation.id === conversationId)) {
+                throw new DatabaseError('Conversation not found', 'NOT_FOUND');
+              }
+            }
             
             (this.data[table] as any[]).push(newRecord);
             await this.saveData();
@@ -842,7 +1483,8 @@ export class JSONDatabase {
               error: null
             };
           } catch (error) {
-            console.error(`Failed to insert into ${table}:`, error);
+            this.restoreData(original);
+            console.error(`Failed to insert into ${table}:`, safeErrorMessage(error));
             return {
               data: null,
               error: {
@@ -856,7 +1498,8 @@ export class JSONDatabase {
       update: (updates: any) => {
         return {
           eq: async (field: string, value: any) => {
-            return this.lockManager.withLock(`update-${table}`, async () => {
+            return this.lockManager.withLock('database-write', async () => {
+              const original = cloneDatabase(this.data);
               try {
                 // 验证更新数据
                 if (!updates || typeof updates !== 'object') {
@@ -887,7 +1530,8 @@ export class JSONDatabase {
                   }
                 };
               } catch (error) {
-                console.error(`Failed to update ${table}:`, error);
+                this.restoreData(original);
+                console.error(`Failed to update ${table}:`, safeErrorMessage(error));
                 return {
                   data: null,
                   error: {
@@ -903,7 +1547,8 @@ export class JSONDatabase {
       delete: () => {
         return {
           eq: async (field: string, value: any) => {
-            return this.lockManager.withLock(`delete-${table}`, async () => {
+            return this.lockManager.withLock('database-write', async () => {
+              const original = cloneDatabase(this.data);
               try {
                 const items = this.data[table] as any[];
                 const index = items.findIndex(item => item[field] === value);
@@ -922,7 +1567,8 @@ export class JSONDatabase {
                   }
                 };
               } catch (error) {
-                console.error(`Failed to delete from ${table}:`, error);
+                this.restoreData(original);
+                console.error(`Failed to delete from ${table}:`, safeErrorMessage(error));
                 return {
                   data: null,
                   error: {
@@ -956,7 +1602,7 @@ export class JSONDatabase {
       
       return { data: conversations, error: null };
     } catch (error) {
-      console.error('Failed to get conversations:', error);
+      console.error('Failed to get conversations:', safeErrorMessage(error));
       return {
         data: null,
         error: {
@@ -990,7 +1636,7 @@ export class JSONDatabase {
       
       return { data: messages, error: null };
     } catch (error) {
-      console.error('Failed to get messages:', error);
+      console.error('Failed to get messages:', safeErrorMessage(error));
       return {
         data: null,
         error: {
@@ -1016,7 +1662,7 @@ export class JSONDatabase {
       
       return { data: provider || null, error: null };
     } catch (error) {
-      console.error('Failed to get AI provider config:', error);
+      console.error('Failed to get AI provider config:', safeErrorMessage(error));
       return {
         data: null,
         error: {
@@ -1039,7 +1685,7 @@ export class JSONDatabase {
       const providers = this.data.ai_providers.filter(p => p.user_id === userId);
       return { data: providers, error: null };
     } catch (error) {
-      console.error('Failed to get AI providers:', error);
+      console.error('Failed to get AI providers:', safeErrorMessage(error));
       return {
         data: null,
         error: {
@@ -1053,8 +1699,9 @@ export class JSONDatabase {
   /**
    * 更新或创建 AI 提供商配置（带锁保护）
    */
-  async updateAIProviderConfig(userId: string, providerName: string, configData: any) {
-    return this.lockManager.withLock(`provider-${userId}-${providerName}`, async () => {
+  async updateAIProviderConfig(userId: string, providerName: string, configData: unknown) {
+    return this.lockManager.withLock('database-write', async () => {
+      const original = cloneDatabase(this.data);
       try {
         if (!userId || !providerName) {
           throw new DatabaseError('User ID and provider name are required', 'INVALID_PARAM');
@@ -1063,6 +1710,8 @@ export class JSONDatabase {
         if (!configData || typeof configData !== 'object') {
           throw new DatabaseError('Invalid config data', 'INVALID_DATA');
         }
+
+        const safeConfig = sanitizeProviderConfig(configData as Record<string, unknown>);
 
         const existingIndex = this.data.ai_providers.findIndex(
           p => p.user_id === userId && p.provider_name === providerName
@@ -1074,7 +1723,9 @@ export class JSONDatabase {
           // 更新现有配置
           this.data.ai_providers[existingIndex] = {
             ...this.data.ai_providers[existingIndex],
-            ...configData,
+            ...safeConfig,
+            user_id: userId,
+            provider_name: providerName,
             updated_at: now
           };
           await this.saveData();
@@ -1082,8 +1733,12 @@ export class JSONDatabase {
         } else {
           // 创建新配置
           const newConfig = {
-            id: uuidv4(),
-            ...configData,
+            id: this.generateUniqueId(this.data.ai_providers),
+            user_id: userId,
+            provider_name: providerName,
+            available_models: [],
+            is_active: true,
+            ...safeConfig,
             created_at: now,
             updated_at: now
           };
@@ -1092,7 +1747,8 @@ export class JSONDatabase {
           return { data: newConfig, error: null };
         }
       } catch (error) {
-        console.error('Failed to update AI provider config:', error);
+        this.restoreData(original);
+        console.error('Failed to update AI provider config:', safeErrorMessage(error));
         return {
           data: null,
           error: {
@@ -1149,7 +1805,8 @@ export class JSONDatabase {
    * 更改用户密码（带锁保护）
    */
   async changePassword(userId: string, currentPassword: string, newPassword: string) {
-    return this.lockManager.withLock(`password-${userId}`, async () => {
+    return this.lockManager.withLock('database-write', async () => {
+      const original = cloneDatabase(this.data);
       try {
         if (!userId || !currentPassword || !newPassword) {
           throw new DatabaseError('All password fields are required', 'INVALID_PARAM');
@@ -1196,7 +1853,8 @@ export class JSONDatabase {
         const { passwordHash: _, ...userWithoutPassword } = this.data.users[userIndex];
         return { data: userWithoutPassword, error: null };
       } catch (error) {
-        console.error('Failed to change password:', error);
+        this.restoreData(original);
+        console.error('Failed to change password:', safeErrorMessage(error));
         return {
           data: null,
           error: {
@@ -1212,7 +1870,8 @@ export class JSONDatabase {
    * 创建新用户（带锁保护）
    */
   async createUser(userData: { username: string; password: string; displayName?: string; email?: string }) {
-    return this.lockManager.withLock('create-user', async () => {
+    return this.lockManager.withLock('database-write', async () => {
+      const original = cloneDatabase(this.data);
       try {
         // 验证输入
         if (!userData.username || !userData.password) {
@@ -1236,7 +1895,7 @@ export class JSONDatabase {
 
         const now = new Date().toISOString();
         const newUser = {
-          id: uuidv4(),
+          id: this.generateUniqueId(this.data.users),
           username: userData.username,
           passwordHash,
           displayName: userData.displayName || userData.username,
@@ -1253,7 +1912,8 @@ export class JSONDatabase {
         const { passwordHash: _, ...userWithoutPassword } = newUser;
         return { data: userWithoutPassword, error: null };
       } catch (error) {
-        console.error('Failed to create user:', error);
+        this.restoreData(original);
+        console.error('Failed to create user:', safeErrorMessage(error));
         return {
           data: null,
           error: {
@@ -1269,7 +1929,8 @@ export class JSONDatabase {
    * 更新用户最后登录时间（带锁保护）
    */
   async updateLastLogin(userId: string) {
-    return this.lockManager.withLock(`login-${userId}`, async () => {
+    return this.lockManager.withLock('database-write', async () => {
+      const original = cloneDatabase(this.data);
       try {
         if (!userId) {
           throw new DatabaseError('User ID is required', 'INVALID_PARAM');
@@ -1290,7 +1951,8 @@ export class JSONDatabase {
           }
         };
       } catch (error) {
-        console.error('Failed to update last login:', error);
+        this.restoreData(original);
+        console.error('Failed to update last login:', safeErrorMessage(error));
         return {
           data: null,
           error: {
@@ -1313,7 +1975,7 @@ export class JSONDatabase {
     try {
       return JSON.stringify(thinking);
     } catch (error) {
-      console.error('Failed to serialize thinking content:', error);
+      console.error('Failed to serialize thinking content:', safeErrorMessage(error));
       return undefined;
     }
   }
@@ -1327,7 +1989,7 @@ export class JSONDatabase {
     try {
       return JSON.parse(thinkingJson);
     } catch (error) {
-      console.error('Failed to deserialize thinking content:', error);
+      console.error('Failed to deserialize thinking content:', safeErrorMessage(error));
       return undefined;
     }
   }
@@ -1351,7 +2013,7 @@ export class JSONDatabase {
       
       return { data: messagesWithParsedThinking, error: null };
     } catch (error) {
-      console.error('Failed to get messages with thinking:', error);
+      console.error('Failed to get messages with thinking:', safeErrorMessage(error));
       return {
         data: null,
         error: {
@@ -1427,8 +2089,3 @@ export class JSONDatabase {
 
 // 导出单例实例
 export const jsonDatabase = new JSONDatabase();
-
-// 导出创建客户端的函数，保持与Supabase相同的接口
-export function createClient(_url?: string, _key?: string) {
-  return jsonDatabase;
-}
