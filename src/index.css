@@ -523,11 +523,6 @@
   background: var(--fg-3);
 }
 
-.onmi-dot.live {
-  background: var(--sig);
-  box-shadow: 0 0 0 2px var(--sig-glow);
-}
-
 .onmi-dot.ok { background: var(--ok); }
 .onmi-dot.warn { background: var(--warn); }
 .onmi-dot.err { background: var(--err); }
@@ -844,6 +839,33 @@
   justify-content: flex-start;
 }
 
+.onmi-session-search {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0 10px 10px;
+  padding: 7px 9px;
+  border: 1px solid var(--line-2);
+  border-radius: 6px;
+  color: var(--fg-3);
+  background: var(--bg-1);
+}
+
+.onmi-session-search:focus-within {
+  border-color: var(--sig);
+  box-shadow: 0 0 0 2px var(--sig-glow);
+}
+
+.onmi-session-search input {
+  min-width: 0;
+  width: 100%;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--fg-1);
+  font: 11px/1.2 var(--font-mono);
+}
+
 .onmi-session-table-head {
   display: grid;
   grid-template-columns: 28px 1fr 36px 22px;
@@ -874,17 +896,59 @@
 
 .onmi-session-row {
   width: 100%;
-  display: grid;
-  grid-template-columns: 28px 1fr 32px;
-  gap: 8px;
+  display: flex;
   align-items: center;
-  padding: 8px 12px;
+  padding: 0 7px 0 10px;
   border: 0;
   border-left: 2px solid transparent;
   background: transparent;
   color: var(--fg-2);
   text-align: left;
+}
+
+.onmi-session-select {
+  min-width: 0;
+  flex: 1;
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) 26px;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 2px 8px 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
   cursor: pointer;
+}
+
+.onmi-session-actions {
+  display: flex;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.onmi-session-row:hover .onmi-session-actions,
+.onmi-session-row:focus-within .onmi-session-actions {
+  opacity: 1;
+}
+
+.onmi-session-actions button {
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--fg-3);
+  cursor: pointer;
+}
+
+.onmi-session-actions button:hover,
+.onmi-session-actions button:focus-visible {
+  background: var(--bg-3);
+  color: var(--fg-0);
 }
 
 .onmi-session-row:hover,
@@ -1059,6 +1123,48 @@
   padding-bottom: 150px;
 }
 
+.onmi-chat-state {
+  min-height: 240px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 24px;
+  color: var(--fg-3);
+  text-align: center;
+}
+
+.onmi-chat-state.error { color: var(--err); }
+
+.onmi-chat-state span {
+  max-width: 540px;
+  overflow-wrap: anywhere;
+}
+
+.onmi-inline-error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 20px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--err), transparent 55%);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--err), transparent 92%);
+  color: var(--err);
+  font-size: 12px;
+}
+
+.onmi-inline-error span { flex: 1; }
+
+.onmi-inline-error button {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
 .onmi-message-stack {
   min-height: 100%;
 }
@@ -1177,6 +1283,26 @@
   letter-spacing: 0.08em;
 }
 
+.onmi-message-status {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  margin-top: 10px;
+  padding: 9px 10px;
+  border: 1px solid color-mix(in srgb, var(--err), transparent 58%);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--err), transparent 93%);
+  color: var(--err);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.onmi-message-status.cancelled {
+  border-color: color-mix(in srgb, var(--warn), transparent 58%);
+  background: color-mix(in srgb, var(--warn), transparent 93%);
+  color: var(--warn);
+}
+
 .onmi-message-actions {
   display: flex;
   gap: 4px;
@@ -1198,6 +1324,32 @@
   border-radius: 12px;
   background: var(--bg-2);
   box-shadow: 0 -2px 30px rgba(0,0,0,0.24), 0 0 0 4px var(--bg-1);
+}
+
+.onmi-provider-onboarding {
+  position: absolute;
+  left: 28px;
+  right: 28px;
+  bottom: 138px;
+  z-index: 8;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--warn), transparent 55%);
+  border-radius: 8px;
+  background: var(--bg-1);
+  color: var(--fg-2);
+  box-shadow: var(--shadow-1);
+  font-size: 12px;
+}
+
+.onmi-provider-onboarding span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+
+.onmi-provider-onboarding a {
+  color: var(--sig);
+  font-weight: 600;
+  white-space: nowrap;
 }
 
 .onmi-composer-input {
@@ -1241,6 +1393,16 @@
   align-items: center;
   gap: 5px;
   min-width: 0;
+}
+
+.onmi-session-error {
+  padding: 16px;
+  color: var(--err);
+  text-align: center;
+}
+
+.onmi-session-error span {
+  overflow-wrap: anywhere;
 }
 
 .onmi-template-picker {
@@ -1388,6 +1550,16 @@
     bottom: max(10px, env(safe-area-inset-bottom));
     border-radius: 10px;
   }
+
+  .onmi-provider-onboarding {
+    left: 12px;
+    right: 12px;
+    bottom: calc(134px + env(safe-area-inset-bottom));
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .onmi-provider-onboarding a { margin-left: 22px; }
 
   .onmi-composer-count {
     display: none;
@@ -2158,6 +2330,86 @@
   line-height: 1.5;
 }
 
+.onmi-data-note.warning {
+  border-color: color-mix(in srgb, var(--warn), transparent 55%);
+  color: var(--warn);
+}
+
+.onmi-credential-opt-in {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 11px 12px;
+  border: 1px solid color-mix(in srgb, var(--warn), transparent 60%);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--warn), transparent 94%);
+  cursor: pointer;
+}
+
+.onmi-credential-opt-in input { margin-top: 3px; }
+.onmi-credential-opt-in span { display: grid; gap: 3px; }
+.onmi-credential-opt-in strong { font-size: 12px; }
+.onmi-credential-opt-in small { color: var(--warn); font-size: 10px; }
+
+.onmi-import-candidate {
+  display: grid;
+  gap: 5px;
+  padding: 11px 12px;
+  border: 1px solid var(--line-2);
+  border-radius: 6px;
+  background: var(--bg-1);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.onmi-import-candidate > span { color: var(--fg-2); }
+.onmi-import-candidate .warning { color: var(--warn); font-weight: 600; }
+.onmi-import-candidate .safe { color: var(--ok); font-weight: 600; }
+
+.onmi-data-error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 14px 32px 0;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--err), transparent 55%);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--err), transparent 93%);
+  color: var(--err);
+  font-size: 12px;
+}
+
+.onmi-data-error span { flex: 1; }
+.onmi-data-error button { border: 0; background: transparent; color: inherit; font-weight: 600; cursor: pointer; }
+
+.onmi-data-health {
+  margin: 0 32px 44px;
+  padding: 18px;
+}
+
+.onmi-data-health-head { display: flex; align-items: center; gap: 12px; }
+.onmi-data-health-head .onmi-rule { flex: 1; }
+
+.onmi-health-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.onmi-health-item {
+  display: grid;
+  gap: 7px;
+  padding: 12px;
+  border: 1px solid var(--line-1);
+  border-radius: 7px;
+  background: var(--bg-2);
+}
+
+.onmi-health-item span { display: flex; align-items: center; gap: 7px; color: var(--fg-3); font-size: 10px; text-transform: uppercase; }
+.onmi-health-item strong { color: var(--fg-1); font: 11px/1.4 var(--font-mono); overflow-wrap: anywhere; }
+.onmi-health-loading { display: flex; align-items: center; gap: 8px; padding: 20px 4px 4px; color: var(--fg-3); font-size: 12px; }
+
 .onmi-drop-zone {
   min-height: 150px;
   display: flex;
@@ -2230,6 +2482,9 @@
     grid-template-columns: 1fr;
     padding: 18px 14px 34px;
   }
+
+  .onmi-data-health { margin: 0 14px 34px; }
+  .onmi-data-error { margin: 12px 14px 0; }
 }
 
 @media (max-width: 560px) {
@@ -2269,6 +2524,9 @@
   .onmi-merge-grid {
     grid-template-columns: 1fr;
   }
+
+  .onmi-health-grid { grid-template-columns: 1fr; }
+  .onmi-data-health { margin: 0 12px 30px; padding: 14px; }
 }
 
 .onmi-usage-header {

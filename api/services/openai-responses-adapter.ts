@@ -11,6 +11,9 @@ import {
   StreamResponse, 
   AIServiceError 
 } from './types.js';
+import { sanitizeErrorMessage } from './error-utils.js';
+
+type AbortableConfig = AIServiceConfig & { signal?: AbortSignal };
 
 export class OpenAIResponsesAdapter implements AIServiceAdapter {
   provider = 'openai-responses' as const;
@@ -86,7 +89,7 @@ export class OpenAIResponsesAdapter implements AIServiceAdapter {
           type: 'response',
           id: config.previousResponseId
         }];
-        console.log('[OpenAI Responses API] 使用链式对话，前一响应ID:', config.previousResponseId);
+        console.log('[OpenAI Responses API] Using chained response context');
       }
 
       // Responses API 通常不支持 temperature 参数，先尝试不添加
@@ -94,12 +97,6 @@ export class OpenAIResponsesAdapter implements AIServiceAdapter {
       //   requestParams.temperature = config.temperature || 0.7;
       // }
 
-      console.log('[DEBUG] config.maxTokens 值:', config.maxTokens);
-      console.log('[DEBUG] Responses API 请求参数:', JSON.stringify(requestParams, null, 2));
-      console.log('[DEBUG] 参数中是否包含 max_tokens:', 'max_tokens' in requestParams);
-      console.log('[DEBUG] 参数中是否包含 max_completion_tokens:', 'max_completion_tokens' in requestParams);
-      console.log('[DEBUG] requestParams 的所有键:', Object.keys(requestParams));
-      
       let response;
       let usedStandardAPI = false;
       
@@ -117,15 +114,15 @@ export class OpenAIResponsesAdapter implements AIServiceAdapter {
             'Authorization': `Bearer ${config.apiKey}`,
             'Content-Type': 'application/json'
           },
-          body: JSON.stringify(requestParams)
+          body: JSON.stringify(requestParams),
+          signal: (config as AbortableConfig).signal
         });
         
         if (!httpResponse.ok) {
           const errorText = await httpResponse.text();
-          console.error('[DEBUG] HTTP 请求失败:', {
+          console.error('[OpenAI Responses] HTTP request failed', {
             status: httpResponse.status,
-            statusText: httpResponse.statusText,
-            body: errorText
+            statusText: httpResponse.statusText
           });
           
           // 创建一个包含 status 属性的错误对象
@@ -136,10 +133,10 @@ export class OpenAIResponsesAdapter implements AIServiceAdapter {
         }
         
         response = await httpResponse.json();
-        console.log('[DEBUG] API 调用成功，响应:', JSON.stringify(response, null, 2));
+        console.log('[OpenAI Responses] Request completed', { model: config.model });
       } catch (error: any) {
         console.error('[DEBUG] API 调用失败:', {
-          message: error.message,
+          message: sanitizeErrorMessage(error.message || 'Unknown error'),
           status: error.status,
           code: error.code,
           type: error.type,
@@ -163,58 +160,42 @@ export class OpenAIResponsesAdapter implements AIServiceAdapter {
                 content: msg.content
               })),
               max_completion_tokens: config.maxTokens || 4000, // 新版 API 使用 max_completion_tokens
-              temperature: config.temperature || 0.7
+              temperature: config.temperature ?? 0.7
             };
-            response = await client.chat.completions.create(standardParams);
+            response = await client.chat.completions.create(standardParams, {
+              signal: (config as AbortableConfig).signal
+            });
             usedStandardAPI = true;
             console.log('[DEBUG] 标准 API 调用成功');
           } catch (fallbackError: any) {
-            console.error('[DEBUG] 标准 API 也失败了:', fallbackError.message);
+            console.error('[DEBUG] 标准 API 也失败了:', sanitizeErrorMessage(fallbackError.message || 'Unknown error'));
             throw fallbackError;
           }
         } else if ((error.code === 'unsupported_value' || error.message?.includes('Unsupported parameter')) && 
                    (error.param === 'temperature' || error.message?.includes('temperature'))) {
           console.log(`[OpenAI Responses] 模型 ${config.model} 不支持自定义 temperature，使用默认值重试`);
           delete requestParams.temperature;
-          console.log('[DEBUG] 重试请求参数:', JSON.stringify(requestParams, null, 2));
-          response = await (client as any).responses.create(requestParams);
-          console.log('[DEBUG] 重试后的响应:', JSON.stringify(response, null, 2));
+          response = await (client as any).responses.create(requestParams, {
+            signal: (config as AbortableConfig).signal
+          });
         } else if (error.message?.includes('max_tokens') && error.message?.includes('max_completion_tokens')) {
           console.log(`[OpenAI Responses] 模型 ${config.model} 需要使用 max_completion_tokens 参数`);
           // 这个错误不应该发生，因为我们已经使用了 max_completion_tokens
           // 但如果发生了，说明可能有其他问题
-          console.error('[DEBUG] 意外的 max_tokens 错误，当前参数:', JSON.stringify(requestParams, null, 2));
+          console.error('[OpenAI Responses] Unexpected token parameter error', { model: config.model });
           throw error;
         } else {
           throw error;
         }
       }
       
-      console.log('[OpenAI Responses API] 响应成功，ID:', response.id);
-      console.log('[OpenAI Responses API] 模型类型:', this.isResearchModel(config.model) ? 'Research' : 'Standard');
+      console.log('[OpenAI Responses API] Response completed', {
+        model: config.model,
+        api: usedStandardAPI ? 'chat-completions' : 'responses'
+      });
 
       // 从 API 响应中提取内容
       let content = '';
-      
-      console.log('[DEBUG] ========== API 响应详情 ==========');
-      console.log('[DEBUG] 使用的 API 类型:', usedStandardAPI ? '标准 Chat Completions API' : 'Responses API');
-      console.log('[DEBUG] 响应状态:', response.status);
-      console.log('[DEBUG] 后台模式:', response.background);
-      console.log('[DEBUG] 响应的所有键:', Object.keys(response));
-      console.log('[DEBUG] response.output 类型:', typeof response.output);
-      if (response.output && Array.isArray(response.output)) {
-        console.log('[DEBUG] response.output 长度:', response.output.length);
-        if (response.output.length > 0) {
-          console.log('[DEBUG] response.output[0] 的键:', Object.keys(response.output[0]));
-          console.log('[DEBUG] response.output[0]:', JSON.stringify(response.output[0], null, 2));
-        } else {
-          console.log('[DEBUG] ⚠️ response.output 是空数组！');
-        }
-      }
-      console.log('[DEBUG] response.text:', JSON.stringify(response.text, null, 2));
-      console.log('[DEBUG] response.usage:', JSON.stringify(response.usage, null, 2));
-      console.log('[DEBUG] 完整响应:', JSON.stringify(response, null, 2));
-      console.log('[DEBUG] =====================================');
       
       if (usedStandardAPI) {
         // 标准 OpenAI Chat Completions API 格式
@@ -248,13 +229,7 @@ export class OpenAIResponsesAdapter implements AIServiceAdapter {
           // 从 output 数组中提取，查找 type 为 "message" 的元素
           const messageOutput = response.output.find((item: any) => item.type === 'message');
           
-          if (!messageOutput) {
-            console.log('[DEBUG] 未找到 type="message" 的输出，检查第一个元素');
-            console.log('[DEBUG] output[0]:', JSON.stringify(response.output[0], null, 2));
-          }
-          
           const outputToUse = messageOutput || response.output[0];
-          console.log('[DEBUG] 使用的 output 元素:', JSON.stringify(outputToUse, null, 2));
           
           // 优先检查 content 字段（可能是字符串或数组）
           if (outputToUse.content) {
@@ -305,7 +280,7 @@ export class OpenAIResponsesAdapter implements AIServiceAdapter {
       
       // 确保 content 是字符串
       if (content && typeof content !== 'string') {
-        console.warn('[DEBUG] content 不是字符串，尝试转换:', typeof content, content);
+        console.warn('[OpenAI Responses] Converting non-string response content', { type: typeof content });
         if (typeof content === 'object') {
           // 如果是对象，尝试提取文本
           if ((content as any).text) {
@@ -328,8 +303,9 @@ export class OpenAIResponsesAdapter implements AIServiceAdapter {
       
       if (!content) {
         console.error('[OpenAI API] 无法提取文本内容');
-        console.error('[DEBUG] 完整响应结构:', JSON.stringify(response, null, 2));
-        console.error('[DEBUG] 响应的所有键:', Object.keys(response));
+        console.error('[OpenAI Responses] Unable to extract text content', {
+          responseKeys: Object.keys(response)
+        });
         
         // 最后尝试从响应中找到任何可能包含文本的字段
         const possibleTextFields = ['output_text', 'text', 'content', 'message', 'result', 'data'];
@@ -366,7 +342,7 @@ export class OpenAIResponsesAdapter implements AIServiceAdapter {
       };
     } catch (error: any) {
       console.error('[OpenAI Responses API] 错误:', {
-        message: error.message,
+        message: sanitizeErrorMessage(error.message || 'Unknown error'),
         status: error.status,
         code: error.code
       });
@@ -402,7 +378,7 @@ export class OpenAIResponsesAdapter implements AIServiceAdapter {
       await client.models.list();
       return true;
     } catch (error: any) {
-      console.error('[OpenAI Responses API] 连接测试失败:', error.message);
+      console.error('[OpenAI Responses API] 连接测试失败:', sanitizeErrorMessage(error.message || 'Unknown error'));
       return false;
     }
   }
@@ -517,7 +493,7 @@ export class OpenAIResponsesAdapter implements AIServiceAdapter {
         name: model.name
       }));
     } catch (error: any) {
-      console.error('[OpenAI Responses API] 获取模型列表失败:', error.message);
+      console.error('[OpenAI Responses API] 获取模型列表失败:', sanitizeErrorMessage(error.message || 'Unknown error'));
       throw new AIServiceError(
         '无法获取 OpenAI 模型列表',
         'openai-responses',

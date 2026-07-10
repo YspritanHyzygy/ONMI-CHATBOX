@@ -24,14 +24,23 @@ class ErrorBoundary extends Component<Props, State> {
   }
 
   componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
-    // 你同样可以将错误日志上报给服务器
-    console.error('ErrorBoundary 捕获到错误:', error, errorInfo);
+    // Do not dump arbitrary Error objects: provider/client errors can retain
+    // request details or user content. Component names are sufficient for a
+    // local render diagnostic.
+    console.error('ONMI UI render error:', {
+      name: error.name,
+      componentStack: errorInfo.componentStack,
+    });
     
     // 调用可选的错误处理回调
     if (this.props.onError) {
       this.props.onError(error, errorInfo);
     }
   }
+
+  private reset = () => {
+    this.setState({ hasError: false, error: undefined });
+  };
 
   render() {
     if (this.state.hasError) {
@@ -41,12 +50,19 @@ class ErrorBoundary extends Component<Props, State> {
       }
 
       return (
-        <div className="flex items-center justify-center p-4 bg-red-50 border border-red-200 rounded-lg">
-          <div className="flex items-center space-x-2 text-red-700">
-            <AlertTriangle className="w-4 h-4" />
-            <span className="text-sm">组件加载失败，请刷新页面重试</span>
-          </div>
-        </div>
+        <main className="min-h-screen bg-background flex items-center justify-center p-6">
+          <section className="max-w-lg rounded-lg border border-destructive/30 bg-destructive/5 p-6 text-center" role="alert">
+            <AlertTriangle className="mx-auto h-8 w-8 text-destructive" />
+            <h1 className="mt-3 text-lg font-semibold">ONMI Chatbox could not render this page</h1>
+            <p className="mt-2 text-sm text-muted-foreground">
+              Your local data was not changed. Try rendering the page again, or reload if the error continues.
+            </p>
+            <div className="mt-4 flex justify-center gap-2">
+              <button type="button" className="rounded border px-3 py-2 text-sm" onClick={this.reset}>Try again</button>
+              <button type="button" className="rounded bg-primary px-3 py-2 text-sm text-primary-foreground" onClick={() => window.location.reload()}>Reload</button>
+            </div>
+          </section>
+        </main>
       );
     }
 

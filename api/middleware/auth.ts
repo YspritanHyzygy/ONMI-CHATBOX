@@ -1,88 +1,89 @@
-/**
- * 认证中间件 — 基于内存 session token 的简单认证
- *
- * 登录/注册时由 auth 路由生成 token 并存入 sessionStore，
- * 后续请求通过 Authorization: Bearer <token> 头携带 token。
- */
-import { Request, Response, NextFunction } from 'express';
 import crypto from 'crypto';
+import type { Request, Response, NextFunction } from 'express';
+import { ensureDatabaseInitialized } from '../services/database-init.js';
+import type { JSONDatabase } from '../services/json-database.js';
+import { sanitizeErrorMessage } from '../services/error-utils.js';
 
-// ── Session Store ──────────────────────────────────────────────
-
-interface Session {
-  userId: string;
-  createdAt: number;
-}
-
-const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 天
-
-/** token → session */
-const sessionStore = new Map<string, Session>();
-
-/** 生成 token 并关联 userId */
-export function createSession(userId: string): string {
-  const token = crypto.randomBytes(32).toString('hex');
-  sessionStore.set(token, { userId, createdAt: Date.now() });
-  return token;
-}
-
-/** 销毁 session（用于 logout） */
-export function destroySession(token: string): void {
-  sessionStore.delete(token);
-}
-
-// 定期清理过期 session（每小时）
-setInterval(() => {
-  const now = Date.now();
-  for (const [token, session] of sessionStore) {
-    if (now - session.createdAt > SESSION_TTL_MS) {
-      sessionStore.delete(token);
-    }
-  }
-}, 60 * 60 * 1000);
-
-// ── Express 类型扩展 ──────────────────────────────────────────
+export const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 declare global {
   namespace Express {
     interface Request {
-      /** 经过认证中间件验证后的用户 ID */
       userId?: string;
+      sessionId?: string;
     }
   }
 }
 
-// ── 中间件 ────────────────────────────────────────────────────
+export function hashSessionToken(token: string): string {
+  return crypto.createHash('sha256').update(token, 'utf8').digest('hex');
+}
 
-/**
- * 认证中间件：验证 Bearer token 并将 userId 挂到 req 上。
- * 放在需要认证的路由前面使用。
- */
-export function requireAuth(req: Request, res: Response, next: NextFunction): void {
+export async function createSession(
+  userId: string,
+  database?: JSONDatabase,
+  ttlMs = SESSION_TTL_MS
+): Promise<string> {
+  const db = database || await ensureDatabaseInitialized();
+  const token = crypto.randomBytes(32).toString('base64url');
+  const expiresAt = new Date(Date.now() + ttlMs).toISOString();
+  await db.createPersistentSession(userId, hashSessionToken(token), expiresAt);
+  return token;
+}
+
+export async function destroySession(
+  token: string,
+  database?: JSONDatabase
+): Promise<boolean> {
+  const db = database || await ensureDatabaseInitialized();
+  return db.deleteSessionByTokenHash(hashSessionToken(token));
+}
+
+export async function destroySessionById(
+  sessionId: string,
+  database?: JSONDatabase
+): Promise<boolean> {
+  const db = database || await ensureDatabaseInitialized();
+  return db.deleteSessionById(sessionId);
+}
+
+function getBearerToken(req: Request): string | null {
   const authHeader = req.headers.authorization;
-
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return null;
+  }
+  const token = authHeader.slice(7).trim();
+  return token || null;
+}
+
+/** Validate a persisted session and scope the request to its owning user. */
+export async function requireAuth(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  const token = getBearerToken(req);
+  if (!token) {
     res.status(401).json({ success: false, error: '未提供认证令牌' });
     return;
   }
 
-  const token = authHeader.slice(7);
-  const session = sessionStore.get(token);
+  try {
+    const db = await ensureDatabaseInitialized();
+    const session = await db.findValidSessionByTokenHash(hashSessionToken(token));
+    if (!session) {
+      res.status(401).json({ success: false, error: '认证令牌无效或已过期' });
+      return;
+    }
 
-  if (!session) {
-    res.status(401).json({ success: false, error: '认证令牌无效或已过期' });
-    return;
+    req.userId = session.user_id;
+    req.sessionId = session.id;
+    next();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error('Session validation failed:', sanitizeErrorMessage(message));
+    res.status(503).json({ success: false, error: '认证服务暂时不可用' });
   }
-
-  // 检查过期
-  if (Date.now() - session.createdAt > SESSION_TTL_MS) {
-    sessionStore.delete(token);
-    res.status(401).json({ success: false, error: '认证令牌已过期，请重新登录' });
-    return;
-  }
-
-  req.userId = session.userId;
-  next();
 }
 
 export function resolveAuthenticatedUserId(req: Request, requestedUserId?: unknown) {

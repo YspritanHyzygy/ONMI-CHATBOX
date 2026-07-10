@@ -2,13 +2,16 @@
  * 用户认证状态管理 - 使用Zustand
  */
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
+import { createJSONStorage, persist, type StateStorage } from 'zustand/middleware';
 import { User, AuthState } from '../types/auth';
 
 interface AuthStore extends AuthState {
   // Actions
   login: (user: User) => void;
+  /** Clear client auth immediately (used by 401 handling). */
   logout: () => void;
+  /** Best-effort server session revocation followed by local logout. */
+  logoutUser: () => Promise<void>;
   setLoading: (loading: boolean) => void;
   updateUser: (userData: Partial<User>) => void;
   
@@ -20,6 +23,28 @@ interface AuthStore extends AuthState {
   fetchUser: (userId: string) => Promise<{ success: boolean; user?: User; error?: string }>;
   validateSession: () => Promise<boolean>;
   validatePassword: (password: string) => { isValid: boolean; errors: string[]; strength: 'weak' | 'medium' | 'strong' };
+}
+
+const memoryFallbackStorage: StateStorage = {
+  getItem: () => null,
+  setItem: () => undefined,
+  removeItem: () => undefined,
+};
+
+function getClientStorage(): StateStorage {
+  try {
+    return globalThis.localStorage || memoryFallbackStorage;
+  } catch {
+    return memoryFallbackStorage;
+  }
+}
+
+function removeClientItem(key: string) {
+  getClientStorage().removeItem(key);
+}
+
+function setClientItem(key: string, value: string) {
+  getClientStorage().setItem(key, value);
 }
 
 const useAuthStore = create<AuthStore>()(
@@ -39,10 +64,25 @@ const useAuthStore = create<AuthStore>()(
       logout: () => {
         set({ user: null, token: null, isAuthenticated: false, isLoading: false });
         // 清除localStorage中的其他用户相关数据
-        localStorage.removeItem('gemini_video_webui_user_id');
-        localStorage.removeItem('selectedModel');
-        localStorage.removeItem('ai-parameters');
-        localStorage.removeItem('conversations');
+        removeClientItem('gemini_video_webui_user_id');
+        removeClientItem('selectedModel');
+        removeClientItem('ai-parameters');
+        removeClientItem('conversations');
+      },
+
+      logoutUser: async () => {
+        const token = get().token;
+        if (token) {
+          try {
+            await fetch('/api/auth/logout', {
+              method: 'POST',
+              headers: { 'Authorization': `Bearer ${token}` },
+            });
+          } catch {
+            console.warn('Server session revocation failed; clearing local session.');
+          }
+        }
+        get().logout();
       },
 
       setLoading: (loading: boolean) => {
@@ -73,7 +113,7 @@ const useAuthStore = create<AuthStore>()(
           if (data.success) {
             set({ token: data.token || null });
             get().login(data.user);
-            localStorage.setItem('gemini_video_webui_user_id', data.user.id);
+            setClientItem('gemini_video_webui_user_id', data.user.id);
             return { success: true, message: data.message };
           } else {
             set({ isLoading: false });
@@ -102,7 +142,7 @@ const useAuthStore = create<AuthStore>()(
             set({ token: data.token || null });
             get().login(data.user);
             // 更新localStorage中的用户ID以保持兼容性
-            localStorage.setItem('gemini_video_webui_user_id', data.user.id);
+            setClientItem('gemini_video_webui_user_id', data.user.id);
             return { success: true, message: data.message };
           } else {
             set({ isLoading: false });
@@ -140,7 +180,7 @@ const useAuthStore = create<AuthStore>()(
             isAuthenticated: true,
             isLoading: false,
           });
-          localStorage.setItem('gemini_video_webui_user_id', data.user.id);
+          setClientItem('gemini_video_webui_user_id', data.user.id);
           return true;
         } catch {
           get().logout();
@@ -249,6 +289,7 @@ const useAuthStore = create<AuthStore>()(
     }),
     {
       name: 'auth-storage',
+      storage: createJSONStorage(getClientStorage),
       // 只持久化用户信息和token，不持久化loading状态
       partialize: (state) => ({
         user: state.user,

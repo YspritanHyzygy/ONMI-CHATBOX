@@ -1,14 +1,14 @@
-import type { ReactNode } from 'react';
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { PanelLeft, Search, Settings } from 'lucide-react';
 import { OnmiLogo, ProviderGlyph, StatusDot } from './OnmiPrimitives';
+import { useOnmiCopy } from './useOnmiCopy';
 
 interface OnmiTopBarProps {
   sidebarOpen: boolean;
   onToggleSidebar: () => void;
   modelLabel?: string;
   provider?: string | null;
-  status?: string;
   commandLabel?: string;
   onCommand?: () => void;
   controls?: ReactNode;
@@ -21,20 +21,54 @@ export default function OnmiTopBar({
   onToggleSidebar,
   modelLabel,
   provider,
-  status = 'CONNECTED',
   commandLabel = '搜索 / 命令',
   onCommand,
   controls,
   settingsHref,
   accountLabel = 'Settings',
 }: OnmiTopBarProps) {
+  const copy = useOnmiCopy();
+  const [health, setHealth] = useState<'checking' | 'online' | 'offline'>('checking');
+  const checkHealth = useCallback(async () => {
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 5_000);
+    try {
+      const response = await fetch('/api/health', { cache: 'no-store', signal: controller.signal });
+      const result = await response.json().catch(() => ({})) as { success?: boolean };
+      setHealth(response.ok && result.success === true ? 'online' : 'offline');
+    } catch {
+      setHealth('offline');
+    } finally {
+      window.clearTimeout(timeout);
+    }
+  }, []);
+
+  useEffect(() => {
+    void checkHealth();
+    window.addEventListener('online', checkHealth);
+    window.addEventListener('focus', checkHealth);
+    return () => {
+      window.removeEventListener('online', checkHealth);
+      window.removeEventListener('focus', checkHealth);
+    };
+  }, [checkHealth]);
+
+  const statusLabel = health === 'checking' ? 'CHECKING' : health === 'online' ? 'BACKEND OK' : 'BACKEND DOWN';
+  const statusState = health === 'checking'
+    ? 'off'
+    : health === 'online'
+      ? 'ok'
+      : 'err';
+
   return (
     <header className="onmi-topbar">
       <button
         type="button"
         className="onmi-icon-button"
         onClick={onToggleSidebar}
-        aria-label={sidebarOpen ? '隐藏侧栏' : '显示侧栏'}
+        aria-label={sidebarOpen ? copy('隐藏侧栏', 'Hide sidebar') : copy('显示侧栏', 'Show sidebar')}
+        aria-expanded={sidebarOpen}
+        aria-controls="onmi-sidebar"
       >
         <PanelLeft size={15} />
       </button>
@@ -43,7 +77,7 @@ export default function OnmiTopBar({
       <div className="onmi-topbar-spacer" />
       {modelLabel && (
         <div className="onmi-model-chip">
-          <ProviderGlyph provider={provider} size={18} />
+          {provider && <ProviderGlyph provider={provider} size={18} />}
           <span className="onmi-mono">{modelLabel}</span>
         </div>
       )}
@@ -68,7 +102,7 @@ export default function OnmiTopBar({
         </Link>
       )}
       <div className="onmi-divider-vertical" />
-      <StatusDot state={status.includes('WARN') ? 'warn' : 'live'} label={status} />
+      <StatusDot state={statusState} label={statusLabel} />
     </header>
   );
 }

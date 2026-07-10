@@ -4,9 +4,20 @@
  */
 import { Router, Request, Response } from 'express';
 import { ensureDatabaseInitialized } from '../services/database-init.js';
-import { createSession, requireAuth, resolveAuthenticatedUserId } from '../middleware/auth.js';
+import {
+  createSession,
+  destroySessionById,
+  requireAuth,
+  resolveAuthenticatedUserId
+} from '../middleware/auth.js';
+import { sanitizeErrorMessage } from '../services/error-utils.js';
 
 const router = Router();
+
+function logRouteError(label: string, error: unknown): void {
+  const message = error instanceof Error ? error.message : String(error);
+  console.error(label, sanitizeErrorMessage(message));
+}
 
 /**
  * 用户注册
@@ -77,14 +88,17 @@ router.post('/register', async (req: Request, res: Response): Promise<void> => {
     });
 
     if (error) {
-      res.status(400).json({
+      const status = error.code === 'USER_EXISTS' || error.code === 'INVALID_PARAM'
+        ? 400
+        : 500;
+      res.status(status).json({
         success: false,
-        error: error.message
+        error: status === 400 ? error.message : 'Server internal error'
       });
       return;
     }
 
-    const token = createSession(user.id);
+    const token = await createSession(user.id, db);
     res.json({
       success: true,
       user,
@@ -92,7 +106,7 @@ router.post('/register', async (req: Request, res: Response): Promise<void> => {
       message: '注册成功'
     });
   } catch (error) {
-    console.error('Register error:', error);
+    logRouteError('Register error:', error);
     res.status(500).json({
       success: false,
       error: '服务器内部错误'
@@ -151,7 +165,7 @@ router.post('/login', async (req: Request, res: Response): Promise<void> => {
     // 更新最后登录时间
     await db.updateLastLogin(user.id);
 
-    const token = createSession(user.id);
+    const token = await createSession(user.id, db);
     res.json({
       success: true,
       user,
@@ -159,7 +173,7 @@ router.post('/login', async (req: Request, res: Response): Promise<void> => {
       message: '登录成功'
     });
   } catch (error) {
-    console.error('Login error:', error);
+    logRouteError('Login error:', error);
     res.status(500).json({
       success: false,
       error: '服务器内部错误'
@@ -198,11 +212,28 @@ router.get('/me', requireAuth, async (req: Request, res: Response): Promise<void
       user
     });
   } catch (error) {
-    console.error('Get current user error:', error);
+    logRouteError('Get current user error:', error);
     res.status(500).json({
       success: false,
       error: 'Server internal error'
     });
+  }
+});
+
+/** Revoke only the session used for this request. */
+router.post('/logout', requireAuth, async (req: Request, res: Response): Promise<void> => {
+  try {
+    if (!req.sessionId) {
+      res.status(401).json({ success: false, error: '未认证用户' });
+      return;
+    }
+
+    const db = await ensureDatabaseInitialized();
+    await destroySessionById(req.sessionId, db);
+    res.json({ success: true, message: '已退出登录' });
+  } catch (error) {
+    logRouteError('Logout error:', error);
+    res.status(500).json({ success: false, error: '退出登录失败' });
   }
 });
 
@@ -237,7 +268,7 @@ router.get('/user/:userId', requireAuth, async (req: Request, res: Response): Pr
       user
     });
   } catch (error) {
-    console.error('Get user error:', error);
+    logRouteError('Get user error:', error);
     res.status(500).json({
       success: false,
       error: '服务器内部错误'
@@ -251,7 +282,8 @@ router.get('/user/:userId', requireAuth, async (req: Request, res: Response): Pr
  */
 router.get('/check-username/:username', async (req: Request, res: Response): Promise<void> => {
   try {
-    const { username } = req.params;
+    const usernameParam = req.params.username;
+    const username = Array.isArray(usernameParam) ? usernameParam[0] : usernameParam;
 
     const db = await ensureDatabaseInitialized();
     const { data: user } = await db.findUserByUsername(username);
@@ -262,7 +294,7 @@ router.get('/check-username/:username', async (req: Request, res: Response): Pro
       message: user ? '用户名已被使用' : '用户名可用'
     });
   } catch (error) {
-    console.error('Check username error:', error);
+    logRouteError('Check username error:', error);
     res.status(500).json({
       success: false,
       error: '服务器内部错误'
@@ -315,9 +347,14 @@ router.post('/change-password', requireAuth, async (req: Request, res: Response)
     const { data: user, error } = await db.changePassword(userId, currentPassword, newPassword);
 
     if (error) {
-      res.status(400).json({
+      const status = error.code === 'USER_NOT_FOUND'
+        ? 404
+        : error.code === 'INVALID_PASSWORD' || error.code === 'INVALID_PARAM'
+          ? 400
+          : 500;
+      res.status(status).json({
         success: false,
-        error: error.message
+        error: status < 500 ? error.message : 'Server internal error'
       });
       return;
     }
@@ -328,7 +365,7 @@ router.post('/change-password', requireAuth, async (req: Request, res: Response)
       message: '密码修改成功'
     });
   } catch (error) {
-    console.error('Change password error:', error);
+    logRouteError('Change password error:', error);
     res.status(500).json({
       success: false,
       error: '服务器内部错误'

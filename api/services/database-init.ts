@@ -1,16 +1,26 @@
-/**
- * 共享的数据库初始化工具
- * 所有路由文件统一使用此函数来初始化 JSON 数据库
- */
 import { jsonDatabase } from './json-database.js';
+import { runMigrations } from './database-migration.js';
 
+let initializationPromise: Promise<typeof jsonDatabase> | null = null;
 let dbInitialized = false;
 
-export async function ensureDatabaseInitialized() {
-  if (!dbInitialized) {
-    await jsonDatabase.init();
-    dbInitialized = true;
-    console.log('JSON Database initialized successfully');
+export function ensureDatabaseInitialized(): Promise<typeof jsonDatabase> {
+  if (!initializationPromise) {
+    initializationPromise = (async () => {
+      await runMigrations(jsonDatabase);
+      dbInitialized = true;
+      console.log('JSON database initialized and migrations completed');
+      return jsonDatabase;
+    })().catch((error) => {
+      initializationPromise = null;
+      dbInitialized = false;
+      throw error;
+    });
   }
-  return jsonDatabase;
+
+  return initializationPromise;
+}
+
+export function isDatabaseInitialized(): boolean {
+  return dbInitialized;
 }

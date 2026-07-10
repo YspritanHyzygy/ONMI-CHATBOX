@@ -1,237 +1,239 @@
-/**
- * Ollama服务适配器
- */
-import OpenAI from 'openai';
-import { 
-  AIServiceAdapter, 
-  AIServiceConfig, 
-  ChatMessage, 
-  AIResponse, 
-  StreamResponse, 
-  AIServiceError 
+import type {
+  AIResponse,
+  AIServiceAdapter,
+  AIServiceConfig,
+  ChatMessage,
+  StreamResponse
 } from './types.js';
+import { AIServiceError } from './types.js';
+import { normalizeOllamaBaseUrl } from './config-manager.js';
 import { buildServiceUrl } from './url-utils.js';
+
+type AbortableConfig = AIServiceConfig & { signal?: AbortSignal };
+
+interface OllamaChatChunk {
+  model?: string;
+  message?: { content?: string };
+  done?: boolean;
+  prompt_eval_count?: number;
+  eval_count?: number;
+}
 
 export class OllamaAdapter implements AIServiceAdapter {
   provider = 'ollama' as const;
 
-  private createClient(config: AIServiceConfig): OpenAI {
-    // Ollama的OpenAI兼容API在 /v1 路径下
-    const baseUrl = config.baseUrl || 'http://localhost:11434';
-    // 确保使用 /v1 路径，但先尝试不同的可能路径
-    const openaiCompatibleUrl = baseUrl.endsWith('/v1') ? baseUrl : `${baseUrl}/v1`;
-    
-    console.log(`[DEBUG] Ollama createClient - baseUrl: ${baseUrl}, final URL: ${openaiCompatibleUrl}`);
-    
-    return new OpenAI({
-      apiKey: config.apiKey || 'ollama', // Ollama通常不需要API key
-      baseURL: openaiCompatibleUrl
-    });
+  private getBaseUrl(config: AIServiceConfig): string {
+    return normalizeOllamaBaseUrl(config.baseUrl);
+  }
+
+  private buildOptions(config: AIServiceConfig) {
+    return {
+      temperature: config.temperature ?? 0.7,
+      num_predict: config.numPredict ?? config.maxTokens ?? 2000,
+      ...(config.topP !== undefined ? { top_p: config.topP } : {}),
+      ...(config.numCtx !== undefined ? { num_ctx: config.numCtx } : {}),
+      ...(config.repeatPenalty !== undefined ? { repeat_penalty: config.repeatPenalty } : {}),
+      ...(config.stop ? { stop: config.stop } : {})
+    };
+  }
+
+  private buildRequest(messages: ChatMessage[], config: AIServiceConfig, stream: boolean) {
+    return {
+      model: config.model,
+      messages: messages.map(message => ({ role: message.role, content: message.content })),
+      stream,
+      options: this.buildOptions(config)
+    };
   }
 
   async chat(messages: ChatMessage[], config: AIServiceConfig): Promise<AIResponse> {
     try {
-      // 先尝试使用Ollama原生API而不是OpenAI兼容API
-      const chatUrl = buildServiceUrl('ollama', 'chat', config.baseUrl);
-      
-      console.log(`[DEBUG] Ollama chat request for model: ${config.model}`);
-      
-      const requestBody = {
-        model: config.model,
-        messages: messages.map(msg => ({
-          role: msg.role,
-          content: msg.content
-        })),
-        stream: false,
-        options: {
-          temperature: config.temperature || 0.7,
-          num_predict: config.maxTokens || 2000
-        }
-      };
-
-      console.log(`[DEBUG] Ollama native API request:`, requestBody);
-      console.log(`[DEBUG] Ollama API URL: ${chatUrl}`);
-      
-      const response = await fetch(chatUrl, {
+      const response = await fetch(buildServiceUrl('ollama', 'chat', this.getBaseUrl(config)), {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(requestBody)
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(this.buildRequest(messages, config, false)),
+        signal: (config as AbortableConfig).signal
       });
 
       if (!response.ok) {
-        throw new AIServiceError(
-          `Ollama API调用失败: HTTP ${response.status}`,
-          'ollama',
-          response.status
-        );
+        throw new AIServiceError(`Ollama request failed with HTTP ${response.status}`, 'ollama', response.status);
       }
 
-      const data = await response.json();
-      console.log(`[DEBUG] Ollama native API response:`, data);
-
-      if (!data.message?.content) {
-        throw new AIServiceError('Ollama返回空响应内容', 'ollama');
+      const data = await response.json() as OllamaChatChunk;
+      const content = data.message?.content;
+      if (!content) {
+        throw new AIServiceError('Ollama returned an empty response', 'ollama');
       }
 
+      const promptTokens = data.prompt_eval_count ?? 0;
+      const completionTokens = data.eval_count ?? 0;
       return {
-        content: data.message.content,
+        content,
         model: data.model || config.model,
         provider: 'ollama',
-        usage: data.usage ? {
-          promptTokens: data.usage.prompt_tokens || 0,
-          completionTokens: data.usage.completion_tokens || 0,
-          totalTokens: data.usage.total_tokens || 0
-        } : undefined
+        usage: {
+          promptTokens,
+          completionTokens,
+          totalTokens: promptTokens + completionTokens
+        }
       };
-    } catch (error: any) {
-      console.error(`[DEBUG] Ollama chat error:`, error);
-      throw new AIServiceError(
-        error.message || 'Ollama API调用失败',
-        'ollama',
-        error.status,
-        error
-      );
+    } catch (error: unknown) {
+      if (error instanceof AIServiceError) throw error;
+      const cause = error as { message?: string; status?: number };
+      throw new AIServiceError(cause.message || 'Ollama request failed', 'ollama', cause.status, error);
     }
   }
 
   async *streamChat(messages: ChatMessage[], config: AIServiceConfig): AsyncGenerator<StreamResponse> {
+    const signal = (config as AbortableConfig).signal;
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+
     try {
-      const client = this.createClient(config);
-      
-      const streamParams: any = {
-        model: config.model,
-        messages: messages.map(msg => ({
-          role: msg.role,
-          content: msg.content
-        })),
-        temperature: config.temperature || 0.7,
-        max_tokens: config.maxTokens || 2000,
-        stream: true
+      const response = await fetch(buildServiceUrl('ollama', 'chat', this.getBaseUrl(config)), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(this.buildRequest(messages, config, true)),
+        signal
+      });
+
+      if (!response.ok) {
+        throw new AIServiceError(`Ollama request failed with HTTP ${response.status}`, 'ollama', response.status);
+      }
+      if (!response.body) {
+        throw new AIServiceError('Ollama returned an empty stream', 'ollama');
+      }
+
+      reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let completed = false;
+
+      const consumeLine = (line: string): OllamaChatChunk | undefined => {
+        const trimmed = line.trim();
+        return trimmed ? JSON.parse(trimmed) as OllamaChatChunk : undefined;
       };
 
-      // 添加其他支持的参数
-      if (config.topP !== undefined) {
-        streamParams.top_p = config.topP;
-      }
-      if (config.frequencyPenalty !== undefined) {
-        streamParams.frequency_penalty = config.frequencyPenalty;
-      }
-      if (config.presencePenalty !== undefined) {
-        streamParams.presence_penalty = config.presencePenalty;
-      }
-      if (config.stop) {
-        streamParams.stop = config.stop;
-      }
-
-      const stream = await client.chat.completions.create(streamParams);
-
-      for await (const chunk of stream as any) {
-        const choice = chunk.choices[0];
-        if (choice?.delta?.content) {
-          yield {
-            content: choice.delta.content,
-            done: false,
-            model: chunk.model,
-            provider: 'ollama'
-          };
+      while (!completed) {
+        if (signal?.aborted) {
+          throw new DOMException('The operation was aborted', 'AbortError');
         }
-        
-        if (choice?.finish_reason) {
-          yield {
-            content: '',
-            done: true,
-            model: chunk.model,
-            provider: 'ollama'
-          };
+
+        const { value, done } = await reader.read();
+        buffer += decoder.decode(value, { stream: !done });
+        const lines = buffer.split(/\r?\n/);
+        // Keep the final unterminated NDJSON record until it is explicitly
+        // consumed below. Ollama usually includes a trailing newline, but a
+        // proxy is allowed to close immediately after the final JSON object.
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          const chunk = consumeLine(line);
+          if (!chunk) continue;
+
+          if (chunk.message?.content) {
+            yield {
+              content: chunk.message.content,
+              done: false,
+              model: chunk.model || config.model,
+              provider: 'ollama'
+            };
+          }
+
+          if (chunk.done) {
+            completed = true;
+            yield {
+              content: '',
+              done: true,
+              model: chunk.model || config.model,
+              provider: 'ollama'
+            };
+            break;
+          }
+        }
+
+        if (done) {
+          if (buffer.trim()) {
+            const chunk = consumeLine(buffer);
+            if (chunk?.message?.content) {
+              yield {
+                content: chunk.message.content,
+                done: false,
+                model: chunk.model || config.model,
+                provider: 'ollama'
+              };
+            }
+            if (chunk?.done) {
+              completed = true;
+              yield {
+                content: '',
+                done: true,
+                model: chunk.model || config.model,
+                provider: 'ollama'
+              };
+            }
+          }
+          buffer = '';
           break;
         }
       }
-    } catch (error: any) {
-      throw new AIServiceError(
-        error.message || 'Ollama流式API调用失败',
-        'ollama',
-        error.status,
-        error
-      );
+
+      if (!completed) {
+        throw new AIServiceError('Ollama stream ended before completion', 'ollama');
+      }
+    } catch (error: unknown) {
+      if (error instanceof AIServiceError) throw error;
+      const cause = error as { message?: string; status?: number };
+      throw new AIServiceError(cause.message || 'Ollama streaming request failed', 'ollama', cause.status, error);
+    } finally {
+      if (signal?.aborted) {
+        await reader?.cancel().catch(() => undefined);
+      }
     }
   }
 
   async testConnection(config: AIServiceConfig): Promise<boolean> {
     try {
-      // 通过检查Ollama服务状态来测试连接，而不是发送聊天消息
-      // 这样可以避免依赖具体的模型配置
-      const url = buildServiceUrl('ollama', 'models', config.baseUrl);
-      const response = await fetch(url);
-      
+      const response = await fetch(
+        buildServiceUrl('ollama', 'models', this.getBaseUrl(config)),
+        { signal: (config as AbortableConfig).signal }
+      );
       return response.ok;
-    } catch (error) {
+    } catch {
       return false;
     }
   }
 
   async getAvailableModels(config: AIServiceConfig): Promise<{ id: string; name: string }[]> {
     try {
-      const url = buildServiceUrl('ollama', 'models', config.baseUrl);
-      console.log(`[DEBUG] Ollama getAvailableModels - fetching from: ${url}`);
-      const response = await fetch(url);
-      
-      if (!response.ok) {
-        throw new AIServiceError(
-          `Failed to fetch Ollama models: HTTP ${response.status}`,
-          'ollama',
-          response.status
-        );
-      }
-      
-      const data = await response.json();
-      console.log(`[DEBUG] Ollama models response:`, JSON.stringify(data, null, 2));
-      
-      const models = data.models?.map((model: any) => ({
-        id: model.name,
-        name: model.name
-      })) || [];
-      
-      console.log(`[DEBUG] Ollama parsed models:`, JSON.stringify(models, null, 2));
-      
-      // If no models are installed, return empty array instead of throwing error
-      if (models.length === 0) {
-        console.log(`[DEBUG] No Ollama models found, but service is running`);
-        return [];
-      }
-      
-      return models;
-    } catch (error: any) {
-      console.error('Ollama获取模型列表失败:', error);
-      
-      // 如果是网络错误，抛出错误；如果只是没有模型，返回空数组
-      if (error instanceof AIServiceError) {
-        throw error;
-      }
-      
-      throw new AIServiceError(
-        `Ollama服务连接失败: ${error.message}`,
-        'ollama',
-        404
+      const response = await fetch(
+        buildServiceUrl('ollama', 'models', this.getBaseUrl(config)),
+        { signal: (config as AbortableConfig).signal }
       );
+      if (!response.ok) {
+        throw new AIServiceError(`Failed to fetch Ollama models: HTTP ${response.status}`, 'ollama', response.status);
+      }
+
+      const data = await response.json() as { models?: Array<{ name?: string }> };
+      return (data.models || [])
+        .filter((model): model is { name: string } => typeof model.name === 'string' && !!model.name)
+        .map(model => ({ id: model.name, name: model.name }));
+    } catch (error: unknown) {
+      if (error instanceof AIServiceError) throw error;
+      const cause = error as { message?: string };
+      throw new AIServiceError(cause.message || 'Unable to connect to Ollama', 'ollama', 503, error);
     }
   }
 
-  // Ollama特有的方法：拉取模型
   async pullModel(modelName: string, config: AIServiceConfig): Promise<boolean> {
     try {
-      const pullUrl = buildServiceUrl('ollama', 'pull', config.baseUrl);
-      const response = await fetch(pullUrl, {
+      const response = await fetch(buildServiceUrl('ollama', 'pull', this.getBaseUrl(config)), {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ name: modelName })
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: modelName }),
+        signal: (config as AbortableConfig).signal
       });
-      
       return response.ok;
-    } catch (error) {
+    } catch {
       return false;
     }
   }

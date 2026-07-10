@@ -11,17 +11,17 @@ import {
   hasBooleanProperty,
   isAIProvider
 } from './type-guards.js';
-import { AIServiceConfig } from './types.js';
+import { AIProvider, AIServiceConfig } from './types.js';
 
 /**
  * Validate chat request body
  */
 export interface ValidatedChatRequest {
   message: string;
-  provider: string;
-  model: string;
+  provider: AIProvider;
+  model?: string;
   conversationId?: string;
-  userId: string;
+  userId?: string;
   parameters?: {
     temperature?: number;
     maxTokens?: number;
@@ -58,16 +58,39 @@ export function validateChatRequest(body: unknown): {
     errors.push('message is required and must be a non-empty string');
   }
 
-  const provider = hasStringProperty(body, 'provider') ? body.provider : 'openai';
-  const model = hasStringProperty(body, 'model') ? body.model : 'gpt-3.5-turbo';
-  const userId = hasStringProperty(body, 'userId') ? body.userId : 'demo-user-001';
+  if (hasProperty(body, 'provider') && typeof body.provider !== 'string') {
+    errors.push('provider must be a string');
+  }
+  const providerValue = hasStringProperty(body, 'provider') ? body.provider.trim() : '';
+  const provider = (providerValue || 'openai') as AIProvider;
+  if (!isAIProvider(provider)) {
+    errors.push(`Invalid provider: ${provider}`);
+  }
+
+  if (hasProperty(body, 'model') && typeof body.model !== 'string') {
+    errors.push('model must be a string');
+  }
+  const modelValue = hasStringProperty(body, 'model') ? body.model.trim() : '';
+  const model = modelValue || undefined;
+
+  if (hasProperty(body, 'userId') && typeof body.userId !== 'string') {
+    errors.push('userId must be a string');
+  }
+  const userIdValue = hasStringProperty(body, 'userId') ? body.userId.trim() : '';
+  const userId = userIdValue || undefined;
 
   // Validate optional fields
-  const conversationId = hasStringProperty(body, 'conversationId') ? body.conversationId : undefined;
+  if (hasProperty(body, 'conversationId') && typeof body.conversationId !== 'string') {
+    errors.push('conversationId must be a string');
+  }
+  const conversationIdValue = hasStringProperty(body, 'conversationId') ? body.conversationId.trim() : '';
+  const conversationId = conversationIdValue || undefined;
 
   // Validate parameters
   let parameters: ValidatedChatRequest['parameters'];
-  if (hasProperty(body, 'parameters') && isObject(body.parameters)) {
+  if (hasProperty(body, 'parameters') && !isObject(body.parameters)) {
+    errors.push('parameters must be an object');
+  } else if (hasProperty(body, 'parameters') && isObject(body.parameters)) {
     const params = body.parameters;
     parameters = {
       temperature: hasNumberProperty(params, 'temperature') ? params.temperature : undefined,
@@ -132,7 +155,7 @@ export function validateChatRequest(body: unknown): {
   return {
     valid: true,
     data: {
-      message: (body as { message: string }).message,
+      message: (body as { message: string }).message.trim(),
       provider,
       model,
       conversationId,
@@ -233,48 +256,6 @@ export function validateProviderConfigRequest(body: unknown): {
 }
 
 /**
- * Validate conversation creation request
- */
-export interface ValidatedConversationRequest {
-  id?: string;
-  userId: string;
-  title?: string;
-}
-
-export function validateConversationRequest(body: unknown): {
-  valid: boolean;
-  data?: ValidatedConversationRequest;
-  errors: string[];
-} {
-  const errors: string[] = [];
-
-  if (!isObject(body)) {
-    return { valid: false, errors: ['Request body must be an object'] };
-  }
-
-  if (!hasStringProperty(body, 'userId') || !body.userId.trim()) {
-    errors.push('userId is required and must be a non-empty string');
-  }
-
-  const title = hasStringProperty(body, 'title') ? body.title : undefined;
-  const id = hasStringProperty(body, 'id') ? body.id : undefined;
-
-  if (errors.length > 0) {
-    return { valid: false, errors };
-  }
-
-  return {
-    valid: true,
-    data: {
-      id,
-      userId: (body as { userId: string }).userId,
-      title
-    },
-    errors: []
-  };
-}
-
-/**
  * Validate AI service configuration
  */
 export function validateAIServiceConfig(config: unknown): {
@@ -303,7 +284,7 @@ export function validateAIServiceConfig(config: unknown): {
   }
 
   // Validate optional numeric fields
-  if (hasProperty(config, 'temperature')) {
+  if (hasProperty(config, 'temperature') && config.temperature !== undefined) {
     if (!hasNumberProperty(config, 'temperature')) {
       errors.push('temperature must be a number');
     } else if (config.temperature < 0 || config.temperature > 2) {
@@ -311,7 +292,7 @@ export function validateAIServiceConfig(config: unknown): {
     }
   }
 
-  if (hasProperty(config, 'maxTokens')) {
+  if (hasProperty(config, 'maxTokens') && config.maxTokens !== undefined) {
     if (!hasNumberProperty(config, 'maxTokens')) {
       errors.push('maxTokens must be a number');
     } else if (config.maxTokens <= 0) {
@@ -319,7 +300,7 @@ export function validateAIServiceConfig(config: unknown): {
     }
   }
 
-  if (hasProperty(config, 'topP')) {
+  if (hasProperty(config, 'topP') && config.topP !== undefined) {
     if (!hasNumberProperty(config, 'topP')) {
       errors.push('topP must be a number');
     } else if (config.topP < 0 || config.topP > 1) {

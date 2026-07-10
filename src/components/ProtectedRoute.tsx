@@ -50,8 +50,12 @@ export default function ProtectedRoute({ children }: ProtectedRouteProps) {
     return <Navigate to="/auth" state={{ from: location }} replace />;
   }
 
-  if (isCheckingSession && validatedToken !== token) {
-    return <div className="min-h-screen bg-background" />;
+  if (validatedToken !== token) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center text-sm text-muted-foreground" role="status">
+        {isCheckingSession ? 'Checking session...' : 'Preparing session check...'}
+      </div>
+    );
   }
 
   return <>{children}</>;

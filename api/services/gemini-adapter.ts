@@ -11,6 +11,9 @@ import {
   AIServiceError 
 } from './types.js';
 import { buildServiceUrl } from './url-utils.js';
+import { sanitizeErrorMessage } from './error-utils.js';
+
+type AbortableConfig = AIServiceConfig & { signal?: AbortSignal };
 
 export class GeminiAdapter implements AIServiceAdapter {
   provider = 'gemini' as const;
@@ -57,7 +60,7 @@ export class GeminiAdapter implements AIServiceAdapter {
       }
 
       const generationConfig: any = {
-        temperature: config.temperature || 0.7
+        temperature: config.temperature ?? 0.7
       };
 
       // 只有当用户明确设置maxTokens时才限制输出长度，否则让模型自动判断
@@ -87,7 +90,9 @@ export class GeminiAdapter implements AIServiceAdapter {
           history: history.slice(0, -1) // 除了最后一条消息
         });
         
-        const result = await chat.sendMessage(lastUserMessage.content);
+        const result = await chat.sendMessage(lastUserMessage.content, {
+          signal: (config as AbortableConfig).signal
+        });
         const response = await result.response;
         
         return {
@@ -102,7 +107,9 @@ export class GeminiAdapter implements AIServiceAdapter {
         };
       } else {
         // 单次对话
-        const result = await model.generateContent(lastUserMessage.content);
+        const result = await model.generateContent(lastUserMessage.content, {
+          signal: (config as AbortableConfig).signal
+        });
         const response = await result.response;
         
         return {
@@ -143,11 +150,10 @@ export class GeminiAdapter implements AIServiceAdapter {
         throw new AIServiceError('No user message found', 'gemini');
       }
 
-      console.log('[Gemini] 用户消息:', lastUserMessage.content.substring(0, 100) + '...');
       console.log('[Gemini] 历史消息数量:', history.length);
 
       const generationConfig: any = {
-        temperature: config.temperature || 0.7
+        temperature: config.temperature ?? 0.7
       };
 
       // 只有当用户明确设置maxTokens时才限制输出长度，否则让模型自动判断
@@ -165,8 +171,6 @@ export class GeminiAdapter implements AIServiceAdapter {
         generationConfig.stopSequences = Array.isArray(config.stop) ? config.stop : [config.stop];
       }
 
-      console.log('[Gemini] 生成配置:', generationConfig);
-
       const model = client.getGenerativeModel({ 
         model: config.model,
         systemInstruction: systemInstruction || undefined,
@@ -180,10 +184,14 @@ export class GeminiAdapter implements AIServiceAdapter {
         const chat = model.startChat({
           history: history.slice(0, -1)
         });
-        result = await chat.sendMessageStream(lastUserMessage.content);
+        result = await chat.sendMessageStream(lastUserMessage.content, {
+          signal: (config as AbortableConfig).signal
+        });
       } else {
         console.log('[Gemini] 使用单次生成模式');
-        result = await model.generateContentStream(lastUserMessage.content);
+        result = await model.generateContentStream(lastUserMessage.content, {
+          signal: (config as AbortableConfig).signal
+        });
       }
 
       console.log('[Gemini] API调用成功，开始处理流式响应...');
@@ -209,8 +217,10 @@ export class GeminiAdapter implements AIServiceAdapter {
             console.log(`[Gemini] 第${chunkCount}个chunk为空`);
           }
         } catch (chunkError: any) {
-          console.error('[Gemini] 处理chunk时出错:', chunkError);
-          // 继续处理下一个chunk
+          console.error('[Gemini] 处理chunk时出错:', sanitizeErrorMessage(chunkError.message || 'Unknown chunk error'));
+          // A missing/corrupt chunk makes the reply incomplete. Propagate the
+          // failure so the chat route never persists partial assistant text.
+          throw chunkError;
         }
       }
       
@@ -224,11 +234,9 @@ export class GeminiAdapter implements AIServiceAdapter {
       };
     } catch (error: any) {
       console.error('[Gemini] 流式聊天出错:', {
-        message: error.message,
+        message: sanitizeErrorMessage(error.message || 'Unknown error'),
         status: error.status,
-        code: error.code,
-        details: error.details,
-        stack: error.stack
+        code: error.code
       });
       
       throw new AIServiceError(

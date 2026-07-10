@@ -15,7 +15,8 @@
     "chinese": "中文",
     "english": "English",
     "default": "Default",
-    "setDefault": "Set as Default"
+    "setDefault": "Set as Default",
+    "retry": "Retry"
   },
   "auth": {
     "login": "Login",
@@ -38,7 +39,7 @@
     "pleaseLogin": "Please login first"
   },
   "chat": {
-    "title": "AI Chat Assistant",
+    "title": "ONMI Chatbox",
     "newChat": "New Chat",
     "sendMessage": "Send Message",
     "placeholder": "Type your message...",
@@ -162,7 +163,6 @@
     "testModelHelp": "This model is only used for testing the connection, it does not affect the default model setting. If not selected, the default model will be used for testing.",
     "deepResearchModels": "Deep Research Models",
     "featureNotSupported": "This feature is not supported yet",
-    "featureComingSoon": "Feature coming soon, stay tuned",
     "selectDefaultModel": "Select default model",
     "availableModels": "Available models:",
     "moreModels": "+{{count}} more",
@@ -180,22 +180,22 @@
     "noResponse": "none",
     "networkError": "Network error",
     "defaultService": "Default Service",
-    "cacheManagementDesc": "Manage application cache and local storage data",
+    "cacheManagementDesc": "Manage browser-only cache and interface preferences",
     "cacheWarningTitle": "Notice",
-    "cacheWarningText": "Clearing cache will delete locally stored data, please proceed with caution. For a complete data wipe, please log out first and clean up from the login page.",
+    "cacheWarningText": "These actions affect only this browser. Server-side accounts, conversations, messages, and provider configuration are not deleted here.",
     "normalClear": "Normal Cache Clear",
     "normalClearTooltipContent": "Settings page tab state, temporary cache data, debug and development data, expired timestamp data",
-    "normalClearTooltipRetained": "Conversation history, model selection, AI parameters, login status, language settings",
-    "normalClearDesc": "Clear temporary data and UI state without affecting conversation history, model selection, and other important configurations.",
+    "normalClearTooltipRetained": "Server history, cached session summaries, model selection, AI parameters, login status, language settings",
+    "normalClearDesc": "Clear temporary browser state without changing server data or saved model preferences.",
     "normalClearButton": "Clear Junk Cache",
     "deepClear": "Deep Cache Clear",
-    "deepClearTooltipContent": "Conversation history, model selection, AI parameters, theme settings, settings page tab state, all temporary and cache data",
+    "deepClearTooltipContent": "Cached session summaries, model selection, AI parameters, theme settings, settings tab state, temporary browser data",
     "deepClearTooltipRetained": "Login status, language settings",
-    "deepClearTooltipWarning": "Note: Almost everything will need to be reconfigured",
-    "deepClearDesc": "Clear conversation history, model selection, AI parameters and all user data, retaining login status and language settings.",
+    "deepClearTooltipWarning": "Server conversations and provider configuration remain unchanged",
+    "deepClearDesc": "Clear most browser-side preferences and cached copies. This does not delete server conversation history.",
     "deepClearButton": "Deep Clear Cache",
     "currentCacheStatus": "Current Cache Status",
-    "cacheConversationHistory": "Conversation History",
+    "cacheConversationHistory": "Cached Session Summaries",
     "cacheModelSelection": "Model Selection",
     "cacheAiParameters": "AI Parameters",
     "cacheSettingsTab": "Settings Tab",
@@ -325,7 +325,7 @@
         "claudeUrl": "https://api.anthropic.com",
         "geminiUrl": "https://generativelanguage.googleapis.com",
         "xaiUrl": "https://api.x.ai/v1",
-        "ollamaUrl": "http://localhost:11434/v1"
+        "ollamaUrl": "http://localhost:11434"
       },
       "descriptions": {
         "openaiKey": "Get your API key from OpenAI console",
@@ -337,6 +337,30 @@
         "responsesApi": "Enable OpenAI's new Responses API for stateful conversations and chained responses"
       }
     }
+  },
+  "history": {
+    "title": "Conversation history",
+    "description": "Manage and reopen your saved AI conversations",
+    "backToChat": "Back to chat",
+    "searchPlaceholder": "Search conversations...",
+    "deleteSelected": "Delete selected",
+    "confirmDelete": "Delete selected conversations?",
+    "confirmDeleteDescription": "Delete {{count}} selected conversations? This cannot be undone.",
+    "confirmDeleteSingle": "Delete conversation?",
+    "confirmDeleteSingleDescription": "This action cannot be undone.",
+    "deleteSuccess": "Conversation data deleted",
+    "deleteFailed": "Delete failed",
+    "loadFailed": "Could not load conversation history",
+    "noResults": "No matching conversations",
+    "empty": "No conversation history yet",
+    "tryDifferent": "Try a different search term",
+    "startFirst": "Start your first AI conversation",
+    "startNow": "Start now",
+    "noPreview": "No preview available",
+    "messages": "messages",
+    "selectConversation": "Select {{title}}",
+    "openConversation": "Open {{title}}",
+    "deleteConversation": "Delete {{title}}"
   },
   "modelSelector": {
     "fetchError": "Failed to fetch model list. Please check if the backend service is running.",

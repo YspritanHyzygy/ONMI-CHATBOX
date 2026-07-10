@@ -25,6 +25,16 @@ describe('JSON Database - Concurrent Processing', () => {
     await fs.rm(tempDir, { recursive: true, force: true });
   });
 
+  async function createTestUser(id = 'test-owner-001') {
+    const result = await jsonDatabase.from('users').insert({
+      id,
+      username: id,
+      passwordHash: 'test-password-hash'
+    });
+    expect(result.error).toBeNull();
+    return id;
+  }
+
   it('should handle concurrent inserts without data loss', async () => {
     const userId = 'test-user-001';
     
@@ -97,6 +107,11 @@ describe('JSON Database - Concurrent Processing', () => {
 
   it('should support pagination for large message lists', async () => {
     const conversationId = 'test-conv-001';
+    await jsonDatabase.from('conversations').insert({
+      id: conversationId,
+      user_id: 'pagination-user',
+      title: 'Pagination test'
+    });
     
     // Create multiple messages
     const promises = Array.from({ length: 20 }, (_, i) => 
@@ -133,7 +148,7 @@ describe('JSON Database - Concurrent Processing', () => {
   });
 
   it('should keep imported merge messages attached to regenerated conversations', async () => {
-    const userId = 'demo-user-001';
+    const userId = await createTestUser();
     const result = await jsonDatabase.importUserData(userId, {
       version: '1.0',
       conversations: [{
@@ -168,7 +183,7 @@ describe('JSON Database - Concurrent Processing', () => {
   });
 
   it('should reject invalid replace imports before clearing existing data', async () => {
-    const userId = 'demo-user-001';
+    const userId = await createTestUser();
     const { data: existing } = await jsonDatabase.from('conversations').insert({
       user_id: userId,
       title: 'Keep me'
@@ -195,7 +210,7 @@ describe('JSON Database - Concurrent Processing', () => {
   });
 
   it('should reject replace imports that collide with another user conversation id', async () => {
-    const userId = 'demo-user-001';
+    const userId = await createTestUser();
     await jsonDatabase.from('users').insert({
       id: 'other-user-001',
       username: 'other-user',
@@ -231,7 +246,7 @@ describe('JSON Database - Concurrent Processing', () => {
   });
 
   it('should fork a user-owned conversation with copied messages', async () => {
-    const userId = 'demo-user-001';
+    const userId = await createTestUser();
     const { data: source } = await jsonDatabase.from('conversations').insert({
       id: 'source-conv-001',
       user_id: userId,
@@ -267,20 +282,21 @@ describe('JSON Database - Concurrent Processing', () => {
   });
 
   it('should reject forking another user conversation', async () => {
+    const userId = await createTestUser();
     const { data: source } = await jsonDatabase.from('conversations').insert({
       id: 'other-conv-001',
       user_id: 'other-user-001',
       title: 'Other user session'
     });
 
-    const result = await jsonDatabase.forkConversationForUser('demo-user-001', source!.id);
+    const result = await jsonDatabase.forkConversationForUser(userId, source!.id);
 
     expect(result.data).toBeNull();
     expect(result.error?.code).toBe('NOT_FOUND');
   });
 
   it('should delete a conversation and its messages together', async () => {
-    const userId = 'demo-user-001';
+    const userId = await createTestUser();
     const { data: source } = await jsonDatabase.from('conversations').insert({
       id: 'delete-conv-001',
       user_id: userId,

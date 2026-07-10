@@ -1,141 +1,165 @@
 # ONMI Chatbox
 
-ONMI Chatbox is a local-first multi-provider AI chat application. It pairs a React/Vite frontend with an Express backend, stores user data in local JSON files, and lets each user bring their own provider API keys.
+ONMI Chatbox is a local-first, bring-your-own-key AI chat workspace for OpenAI, Anthropic Claude, Google Gemini, xAI, and Ollama. A React/Vite client talks to an Express API, while accounts, sessions, provider settings, conversations, and messages stay in a local JSON database.
 
 [简体中文](README.zh-CN.md)
 
-## What Works
+> Project status: local development preview. ONMI is designed for one trusted machine. It is not a hosted service or a production-ready multi-user deployment.
 
-- User registration and login with per-user conversation isolation.
-- Provider configuration from the Settings page or `.env` fallbacks.
-- Chat streaming over server-sent events.
-- Conversation history, reload, deletion, Markdown transcript export, and session forking.
-- Local JSON backup export/import for this app's own data format.
-- Local usage estimates derived from stored conversations and messages.
-- English and Simplified Chinese UI strings.
+## Current capabilities
 
-## Supported Providers
-
-The app includes adapters and configuration UI for:
-
-- OpenAI
-- Anthropic Claude
-- Google Gemini
-- xAI Grok
-- Ollama
-
-Provider billing and token accounting remain external. The Usage page shows local estimates only; use each provider's official dashboard for authoritative billing.
+- Local accounts with user-scoped conversations and restart-safe sessions.
+- Streaming chat over server-sent events (SSE).
+- Provider and model configuration from the UI, with environment-variable fallbacks.
+- Conversation history, search, rename, delete, fork, and Markdown transcript export.
+- Safe JSON backups that exclude API credentials by default.
+- Import preview and confirmation for destructive or credential-bearing restores.
+- Read-only database health reporting for migration and integrity issues.
+- Local request/token estimates. Provider dashboards remain the billing source of truth.
+- English and Simplified Chinese UI.
 
 ## Requirements
 
-- Node.js 18 or newer
+- Node.js 20 or newer
 - npm
-- Optional API keys for the providers you want to use
+- An API key for each remote provider you use, or a local Ollama instance
 
-## Setup
+## Quick start
 
 ```bash
-npm install
+npm ci
 ```
 
-Create a `.env` file in the project root if you want server-side fallback keys:
-
-```env
-OPENAI_API_KEY=sk-your-openai-key
-GEMINI_API_KEY=your-gemini-key
-CLAUDE_API_KEY=your-claude-key
-XAI_API_KEY=your-xai-key
-OLLAMA_BASE_URL=http://localhost:11434
-```
-
-You can also add provider keys in the Settings page after signing in.
-
-## Development
-
-Run the frontend and backend together:
+Optionally copy `.env.example` to `.env` and add server-side fallback keys. You can also leave the keys empty and configure providers after signing in.
 
 ```bash
 npm run dev
 ```
 
-Or run them separately:
+Open `http://localhost:5173`, register a local account, then configure at least one provider in **Settings**.
 
-```bash
-npm run client:dev
-npm run server:dev
+Default endpoints:
+
+- Web client: `http://localhost:5173`
+- API and health check: `http://127.0.0.1:3001/api`
+
+The server binds to `127.0.0.1` by default. Do not change `HOST` to a public interface without also setting a narrow `CORS_ORIGINS` list and understanding that provider credentials are stored locally in plaintext.
+
+## Provider configuration
+
+UI settings take precedence over environment fallbacks for the signed-in user.
+
+```env
+OPENAI_API_KEY=
+OPENAI_BASE_URL=https://api.openai.com/v1
+OPENAI_DEFAULT_MODEL=gpt-5
+
+CLAUDE_API_KEY=
+CLAUDE_BASE_URL=https://api.anthropic.com
+CLAUDE_DEFAULT_MODEL=claude-sonnet-4
+
+GEMINI_API_KEY=
+GEMINI_DEFAULT_MODEL=gemini-2.5-pro
+
+XAI_API_KEY=
+XAI_BASE_URL=https://api.x.ai/v1
+XAI_DEFAULT_MODEL=grok-4
+
+OLLAMA_BASE_URL=http://localhost:11434
+OLLAMA_DEFAULT_MODEL=llama-4-scout
 ```
 
-Default local URLs:
+For Ollama, use the server root such as `http://localhost:11434`, not `/v1`. ONMI normalizes older `/v1` values and uses Ollama's native chat and model endpoints.
 
-- Frontend: `http://localhost:5173`
-- Backend API: `http://localhost:3001/api`
+An adapter being present does not guarantee that every model revision is compatible. Use the connection/model test in Settings before relying on a configuration.
 
-There is no `npm start` script in this project. For release checks, build the frontend and run the backend with the deployment process you choose.
+## Local data and security
 
-## Verification
-
-```bash
-npm run check
-npm run test:run
-npm run build
-```
-
-`npm run check` runs TypeScript. `npm run test:run` runs Vitest once. `npm run build` type-checks and builds the Vite frontend.
-
-## Data Storage
-
-Runtime data is stored locally under `data/`, especially:
+The default database is:
 
 ```text
 data/database.json
 ```
 
-This file contains users, conversations, messages, provider settings, and related local state. The app does not require an external database.
+Set `GEMINI_VIDEO_WEBUI_DB_PATH` to use another location. Automated tests always use an isolated temporary database.
 
-## API Surface
+Important security properties:
 
-Authentication:
+- Provider API keys are currently stored in plaintext in the local database. OS keychain or master-password encryption is not implemented.
+- Session tokens are random opaque values; only their SHA-256 hashes and expiry times are persisted.
+- Upgrading from the older in-memory token implementation requires signing in once again.
+- Standard backup v2 files exclude API keys and never include sessions.
+- “Include credentials” creates a sensitive plaintext backup and requires explicit confirmation.
+- Replace imports require an additional destructive-action confirmation.
+- Database migrations create a backup first. Integrity findings are reported but orphaned records are never deleted automatically.
 
-- `POST /api/auth/register`
-- `POST /api/auth/login`
-- `GET /api/auth/me`
-- `GET /api/auth/user/:userId`
-- `GET /api/auth/check-username/:username`
+Treat the database and credential-bearing backups like password files. Do not commit, email, or upload them to untrusted services.
 
-Chat:
+## Verification
 
-- `GET /api/chat/conversations`
-- `POST /api/chat/conversations`
-- `GET /api/chat/conversations/:conversationId/messages`
-- `POST /api/chat/conversations/:conversationId/fork`
-- `DELETE /api/chat/conversations/:conversationId`
-- `POST /api/chat`
-
-Data:
-
-- `GET /api/data/preview/:userId`
-- `GET /api/data/export/:userId`
-- `POST /api/data/import/:userId`
-
-Usage:
-
-- `GET /api/business/usage/:userId`
-
-Authenticated routes are scoped to the current user. Do not bypass the existing auth middleware or user-scoped database helpers when adding routes.
-
-## Project Layout
-
-```text
-api/        Express routes, auth middleware, provider adapters, JSON database
-src/        React app, pages, components, hooks, Zustand stores
-data/       Local runtime JSON data
-public/     Static assets
+```bash
+npm run verify
+npm run test:e2e
 ```
 
-## Notes For Contributors
+`verify` runs TypeScript checks, ESLint, all Vitest tests, and a production frontend build. The Playwright smoke suite starts the app with an isolated database and a local mock Ollama server; it never calls a real AI provider.
 
-- The backend uses ESM imports with explicit `.js` extensions even though source files are TypeScript.
-- Chat responses stream through SSE, not Socket.IO.
-- Keep route handlers thin and put shared behavior in `api/services/`.
-- Treat Usage numbers as local estimates unless a provider returns exact usage metadata.
-- Prefer the existing shadcn/Radix/Tailwind patterns instead of adding new UI dependencies.
+Additional commands:
+
+```bash
+npm run test:run
+npm run test:coverage
+npm run check
+npm run lint
+npm run build
+```
+
+The test suite covers critical database, authentication, chat-context, provider, and UI regressions. It does not prove that third-party provider APIs are available, that every remote model behaves identically, or that ONMI is suitable for hostile multi-tenant hosting.
+
+## Architecture
+
+```text
+React/Vite client
+      │ authenticated fetch + SSE
+      ▼
+Express API ── provider adapters ── OpenAI / Claude / Gemini / xAI / Ollama
+      │
+      └── local JSON database (users, hashed sessions, configs, chats)
+```
+
+Main directories:
+
+```text
+src/        React pages, chat UI, stores, hooks, and i18n
+api/        Express routes, auth, migrations, database, and provider adapters
+e2e/        Isolated Playwright smoke tests
+data/       Ignored local runtime data
+```
+
+All routes except `/api/auth/*` and `/api/health` pass through authentication middleware. User data access must remain scoped through the authenticated user, never a trusted client-supplied ID.
+
+Notable endpoints:
+
+- `POST /api/auth/register`, `POST /api/auth/login`, `GET /api/auth/me`, `POST /api/auth/logout`
+- `GET /api/chat/conversations`, `PATCH /api/chat/conversations/:id`, `DELETE /api/chat/conversations`
+- `GET /api/chat/conversations/:id/messages`, `POST /api/chat/conversations/:id/fork`, `POST /api/chat`
+- `GET /api/data/preview/:userId`, `GET /api/data/export/:userId`, `POST /api/data/import/:userId`
+- `GET /api/data/health`
+- `GET /api/business/usage/:userId`
+
+## Deployment limits
+
+- `npm run build` builds the browser client; this repository intentionally has no cloud/serverless deployment configuration.
+- The JSON database is single-machine storage and is not safe for horizontally scaled or ephemeral hosting.
+- Keep the API on localhost unless you add an appropriate reverse proxy, TLS, origin policy, rate limiting, durable shared storage, and a secrets strategy.
+
+## Contributor notes
+
+- The backend is ESM. TypeScript source imports use explicit `.js` extensions for Node resolution.
+- Chat transport is SSE, not Socket.IO.
+- Keep route handlers thin and shared behavior in `api/services/`.
+- Preserve the dual `data`/`conversations` list response while older clients may depend on it.
+- Never log provider credentials, raw session tokens, or complete sensitive request objects.
+- Keep `README.md` and `README.zh-CN.md` behaviorally synchronized.
+
+No project license is currently declared.

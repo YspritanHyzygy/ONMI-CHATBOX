@@ -6,6 +6,7 @@ import { Router, Request, Response } from 'express';
 import { ensureDatabaseInitialized } from '../services/database-init.js';
 import { resolveAuthenticatedUserId } from '../middleware/auth.js';
 import { calculateLocalUsageStats, type UsageMessage } from '../services/usage-stats.js';
+import { getSafeErrorMessage } from '../services/error-utils.js';
 
 const router = Router();
 
@@ -42,6 +43,15 @@ const BUSINESS_CONFIG = {
       features: ['all']
     }
   }
+};
+
+// BYOK usage reporting is observational only; this app does not enforce a
+// local request quota when the optional business system is disabled.
+const LOCAL_BYOK_LIMITS = {
+  dailyRequests: -1,
+  monthlyRequests: -1,
+  maxTokensPerRequest: -1,
+  concurrentRequests: -1
 };
 
 
@@ -99,7 +109,7 @@ router.get('/subscription/:userId', async (req: Request, res: Response): Promise
       }
     });
   } catch (error) {
-    console.error('Get subscription error:', error);
+    console.error('Get subscription error:', getSafeErrorMessage(error));
     res.status(500).json({
       success: false,
       error: '获取订阅信息失败'
@@ -156,7 +166,9 @@ router.get('/usage/:userId', async (req: Request, res: Response): Promise<void> 
     const usage = calculateLocalUsageStats(
       conversations || [],
       messages,
-      BUSINESS_CONFIG.plans.free.apiLimits
+      BUSINESS_CONFIG.enabled
+        ? BUSINESS_CONFIG.plans[BUSINESS_CONFIG.defaultPlan].apiLimits
+        : LOCAL_BYOK_LIMITS
     );
 
     res.json({
@@ -164,7 +176,7 @@ router.get('/usage/:userId', async (req: Request, res: Response): Promise<void> 
       data: usage
     });
   } catch (error) {
-    console.error('Get usage error:', error);
+    console.error('Get usage error:', getSafeErrorMessage(error));
     res.status(500).json({
       success: false,
       error: '获取使用统计失败'
@@ -229,7 +241,7 @@ router.get('/plans', async (_req: Request, res: Response): Promise<void> => {
       data: plans
     });
   } catch (error) {
-    console.error('Get plans error:', error);
+    console.error('Get plans error:', getSafeErrorMessage(error));
     res.status(500).json({
       success: false,
       error: '获取订阅计划失败'
@@ -277,7 +289,7 @@ router.post('/subscribe', async (req: Request, res: Response): Promise<void> => 
       }
     });
   } catch (error) {
-    console.error('Subscribe error:', error);
+    console.error('Subscribe error:', getSafeErrorMessage(error));
     res.status(500).json({
       success: false,
       error: '创建订阅失败'
@@ -319,7 +331,7 @@ router.post('/api-keys', async (req: Request, res: Response): Promise<void> => {
       data: null
     });
   } catch (error) {
-    console.error('Generate API key error:', error);
+    console.error('Generate API key error:', getSafeErrorMessage(error));
     res.status(500).json({
       success: false,
       error: '生成API密钥失败'
