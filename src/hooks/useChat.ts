@@ -1,11 +1,13 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { fetchWithAuth } from '@/lib/fetch';
 import {
-  getValidatedModel,
   getValidatedConversations,
-  setStorageItem
+  getValidatedModel,
+  setStorageItem,
 } from '@/lib/storage';
+
+export type MessageStatus = 'streaming' | 'complete' | 'error' | 'cancelled';
 
 export interface Message {
   id: string;
@@ -19,6 +21,8 @@ export interface Message {
   thinkingTokens?: number;
   reasoningEffort?: string;
   thoughtSignature?: string;
+  status?: MessageStatus;
+  error?: string;
 }
 
 export interface Conversation {
@@ -28,6 +32,8 @@ export interface Conversation {
   created_at: Date;
   provider?: string;
   model?: string;
+  /** False only for an optimistic first turn that the server has not accepted yet. */
+  persisted?: boolean;
 }
 
 export interface ModelOption {
@@ -50,6 +56,117 @@ export interface AIParameters {
   background?: boolean;
 }
 
+type LoadState = 'loading' | 'ready' | 'error';
+
+interface JsonRecord {
+  [key: string]: unknown;
+}
+
+const STREAM_IDLE_TIMEOUT_MS = 120_000;
+
+function randomId(prefix = '') {
+  const id = globalThis.crypto?.randomUUID?.() || Math.random().toString(36).slice(2);
+  return `${prefix}${id}`;
+}
+
+function getConversationIdFromUrl() {
+  return new URLSearchParams(window.location.search).get('conversation');
+}
+
+function updateConversationUrl(conversationId?: string) {
+  const url = new URL(window.location.href);
+  if (conversationId) url.searchParams.set('conversation', conversationId);
+  else url.searchParams.delete('conversation');
+  window.history.replaceState({}, '', url.toString());
+}
+
+function getString(value: unknown, fallback = ''): string {
+  return typeof value === 'string' ? value : fallback;
+}
+
+function hasConfiguredSecret(value: unknown): boolean {
+  const secret = getString(value).trim();
+  return Boolean(secret && secret !== 'undefined' && secret !== 'null');
+}
+
+function isUsableHttpUrl(value: unknown): boolean {
+  const raw = getString(value).trim();
+  if (!raw) return false;
+  try {
+    const url = new URL(raw);
+    return (url.protocol === 'http:' || url.protocol === 'https:') && Boolean(url.hostname);
+  } catch {
+    return false;
+  }
+}
+
+function normalizeMessage(raw: JsonRecord): Message {
+  return {
+    id: getString(raw.id, randomId('message-')),
+    content: getString(raw.content),
+    role: raw.role === 'assistant' ? 'assistant' : 'user',
+    timestamp: new Date(getString(raw.created_at) || getString(raw.timestamp) || Date.now()),
+    hasThinking: Boolean(raw.has_thinking ?? raw.hasThinking),
+    thinkingContent: getString(raw.thinking_content ?? raw.thinkingContent) || undefined,
+    thinkingTokens: typeof (raw.thinking_tokens ?? raw.thinkingTokens) === 'number'
+      ? Number(raw.thinking_tokens ?? raw.thinkingTokens)
+      : undefined,
+    reasoningEffort: getString(raw.reasoning_effort ?? raw.reasoningEffort) || undefined,
+    thoughtSignature: getString(raw.thought_signature ?? raw.thoughtSignature) || undefined,
+    status: 'complete',
+    isTyping: false,
+  };
+}
+
+function normalizeConversation(raw: JsonRecord): Conversation {
+  const rawMessages = Array.isArray(raw.messages) ? raw.messages : [];
+  return {
+    id: getString(raw.id),
+    title: getString(raw.title, 'Untitled session'),
+    created_at: new Date(getString(raw.created_at) || Date.now()),
+    provider: getString(raw.provider ?? raw.provider_used) || undefined,
+    model: getString(raw.model ?? raw.model_used) || undefined,
+    messages: rawMessages
+      .filter((message): message is JsonRecord => Boolean(message) && typeof message === 'object')
+      .map(normalizeMessage),
+    persisted: true,
+  };
+}
+
+function getErrorMessage(payload: unknown, fallback: string) {
+  if (payload && typeof payload === 'object' && 'error' in payload) {
+    const error = (payload as { error?: unknown }).error;
+    if (typeof error === 'string' && error.trim()) return error;
+  }
+  return fallback;
+}
+
+function createCacheSnapshot(conversations: Conversation[]) {
+  return conversations
+    .filter((conversation) => conversation.persisted !== false)
+    .map((conversation) => ({
+      ...conversation,
+      persisted: true,
+      messages: conversation.messages.filter((message) => (
+        message.role === 'user' || message.status === 'complete' || !message.status
+      )),
+    }));
+}
+
+async function readWithTimeout(reader: ReadableStreamDefaultReader<Uint8Array>) {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      reader.read(),
+      new Promise<never>((_, reject) => {
+        timeoutId = setTimeout(() => reject(new Error('STREAM_IDLE_TIMEOUT')), STREAM_IDLE_TIMEOUT_MS);
+      }),
+    ]);
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+  }
+}
+
 export function useChat() {
   const { t } = useTranslation();
   const [conversations, setConversations] = useState<Conversation[]>([]);
@@ -60,519 +177,774 @@ export function useChat() {
   const [aiParameters, setAiParameters] = useState<AIParameters>({
     temperature: 0.7,
     maxTokens: undefined,
-    topP: 1.0,
-    useResponsesAPI: false
+    topP: 1,
+    useResponsesAPI: false,
   });
+  const [conversationsState, setConversationsState] = useState<LoadState>('loading');
+  const [conversationsError, setConversationsError] = useState<string | null>(null);
+  const [isConversationLoading, setIsConversationLoading] = useState(false);
+  const [conversationLoadError, setConversationLoadError] = useState<string | null>(null);
+  const [configuredProviders, setConfiguredProviders] = useState<string[]>([]);
+  const [providerConfigState, setProviderConfigState] = useState<LoadState>('loading');
+  const [providerConfigError, setProviderConfigError] = useState<string | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const generationAbortRef = useRef<AbortController | null>(null);
+  const conversationAbortRef = useRef<AbortController | null>(null);
+  const conversationsAbortRef = useRef<AbortController | null>(null);
+  const providerConfigAbortRef = useRef<AbortController | null>(null);
+  const conversationRequestRef = useRef(0);
+  const conversationsRef = useRef<Conversation[]>([]);
+  const currentConversationRef = useRef<Conversation | null>(null);
+  const viewRevisionRef = useRef(0);
+
+  useEffect(() => {
+    conversationsRef.current = conversations;
+  }, [conversations]);
+
+  useEffect(() => {
+    currentConversationRef.current = currentConversation;
+  }, [currentConversation]);
+
+  const saveConversationsToStorage = useCallback((next: Conversation[]) => {
+    const result = setStorageItem('conversations', createCacheSnapshot(next));
+    if (!result.success) console.error('Failed to save conversation cache:', result.error);
+  }, []);
+
+  const commitConversations = useCallback((updater: (previous: Conversation[]) => Conversation[]) => {
+    setConversations((previous) => {
+      const next = updater(previous);
+      conversationsRef.current = next;
+      saveConversationsToStorage(next);
+      return next;
+    });
+  }, [saveConversationsToStorage]);
 
   const handleModelChange = useCallback((model: ModelOption) => {
-    try {
-      setSelectedModel(model);
-      const result = setStorageItem('selectedModel', model);
-      if (!result.success) {
-        console.error('Failed to save model:', result.error);
-      }
-    } catch (error) {
-      console.error('Model selection failed:', error);
-    }
-  }, []);
-
-  const saveConversationsToStorage = useCallback((convs: Conversation[]) => {
-    const result = setStorageItem('conversations', convs);
-    if (!result.success) {
-      console.error('Failed to save conversations:', result.error);
-    }
-  }, []);
-
-  const loadConversationsFromStorage = useCallback(() => {
-    const result = getValidatedConversations('conversations');
-    if (result.success && result.data) {
-      const convs = result.data.map((conv: any) => ({
-        ...conv,
-        created_at: new Date(conv.created_at),
-        messages: conv.messages.map((msg: any) => ({
-          ...msg,
-          timestamp: new Date(msg.timestamp)
-        }))
-      }));
-      setConversations(convs);
-    }
+    setSelectedModel(model);
+    const result = setStorageItem('selectedModel', model);
+    if (!result.success) console.error('Failed to save model:', result.error);
   }, []);
 
   const loadSelectedModel = useCallback(() => {
     const result = getValidatedModel('selectedModel');
-    if (result.success && result.data) {
-      setSelectedModel(result.data);
-    }
+    setSelectedModel(result.success && result.data ? result.data as ModelOption : null);
+  }, []);
+
+  const loadConversationsFromStorage = useCallback(() => {
+    const result = getValidatedConversations('conversations');
+    if (!result.success || !result.data) return;
+    const cached = result.data
+      .filter((value): value is JsonRecord => Boolean(value) && typeof value === 'object')
+      .map(normalizeConversation)
+      .filter((conversation) => Boolean(conversation.id));
+    conversationsRef.current = cached;
+    setConversations(cached);
   }, []);
 
   const loadUserSettings = useCallback(async () => {
+    providerConfigAbortRef.current?.abort();
+    const controller = new AbortController();
+    providerConfigAbortRef.current = controller;
     try {
-      const response = await fetchWithAuth('/api/providers/config');
-      if (response.ok) {
-        const result = await response.json();
-        if (result.success && result.data) {
-          const openaiConfig = result.data.find((config: any) => config.provider_name === 'openai');
-          if (openaiConfig && openaiConfig.use_responses_api === 'true') {
-            setAiParameters(prev => ({ ...prev, useResponsesAPI: true }));
-          }
-        }
+      setProviderConfigState('loading');
+      setProviderConfigError(null);
+      const [configResponse, providerResponse] = await Promise.all([
+        fetchWithAuth('/api/providers/config', { signal: controller.signal }).catch(() => null),
+        fetchWithAuth('/api/providers', { signal: controller.signal }).catch(() => null),
+      ]);
+      if (controller.signal.aborted) return;
+      const configResult = configResponse?.ok
+        ? await configResponse.json().catch(() => ({})) as { success?: boolean; data?: JsonRecord[] }
+        : null;
+      const providerResult = providerResponse?.ok
+        ? await providerResponse.json().catch(() => ({})) as { success?: boolean; data?: JsonRecord[] }
+        : null;
+      if (controller.signal.aborted) return;
+      const hasConfigResult = configResult?.success === true && Array.isArray(configResult.data);
+      const hasProviderResult = providerResult?.success === true && Array.isArray(providerResult.data);
+      if (!hasConfigResult && !hasProviderResult) {
+        throw new Error(t('chat.loadProviderConfigFailed', { defaultValue: 'Could not verify provider configuration.' }));
       }
+      const savedConfigs = hasConfigResult ? configResult!.data! : [];
+      const providerSummaries = hasProviderResult ? providerResult!.data! : [];
+      const openaiConfig = savedConfigs.find((config) => config.provider_name === 'openai');
+      const configured = new Set<string>(providerSummaries.flatMap((provider) => {
+        // The provider list also contains active-but-incomplete user records.
+        // Only its environment entries are authoritative; saved user configs
+        // are validated for the fields required by each provider below.
+        if (provider.source !== 'environment') return [];
+        const name = getString(provider.id ?? provider.provider_name);
+        return name ? [name] : [];
+      }));
+      for (const config of savedConfigs) {
+        const providerName = getString(config.provider_name);
+        const isActive = config.is_active !== false && config.is_active !== 'false';
+        const hasRequiredConfig = isUsableHttpUrl(config.base_url)
+          && (providerName === 'ollama' || hasConfiguredSecret(config.api_key));
+        if (providerName && isActive && hasRequiredConfig) configured.add(providerName);
+      }
+      setConfiguredProviders([...configured]);
+      setAiParameters((previous) => ({
+        ...previous,
+        useResponsesAPI: openaiConfig?.use_responses_api === 'true',
+      }));
+      setProviderConfigState('ready');
     } catch (error) {
+      if (controller.signal.aborted) return;
       console.error('Failed to load user settings:', error);
+      setConfiguredProviders([]);
+      setProviderConfigState('error');
+      setProviderConfigError(error instanceof Error ? error.message : t('chat.loadProviderConfigFailed', { defaultValue: 'Could not verify provider configuration.' }));
+    } finally {
+      if (providerConfigAbortRef.current === controller) {
+        providerConfigAbortRef.current = null;
+      }
     }
-  }, []);
+  }, [t]);
+
+  const loadConversationMessages = useCallback(async (
+    conversation: Conversation,
+    updateUrl = true,
+  ) => {
+    viewRevisionRef.current += 1;
+    conversationAbortRef.current?.abort();
+    const controller = new AbortController();
+    conversationAbortRef.current = controller;
+    const requestId = ++conversationRequestRef.current;
+
+    currentConversationRef.current = conversation;
+    setCurrentConversation(conversation);
+    setConversationLoadError(null);
+    setIsConversationLoading(true);
+    if (updateUrl) updateConversationUrl(conversation.id);
+
+    try {
+      const response = await fetchWithAuth(
+        `/api/chat/conversations/${encodeURIComponent(conversation.id)}/messages`,
+        { signal: controller.signal },
+      );
+      const result = await response.json().catch(() => ({})) as JsonRecord;
+      if (!response.ok || result.success !== true || !Array.isArray(result.data)) {
+        throw new Error(getErrorMessage(result, t('chat.loadMessagesFailed', { defaultValue: 'Failed to load this session.' })));
+      }
+
+      const messages = result.data
+        .filter((value): value is JsonRecord => Boolean(value) && typeof value === 'object')
+        .map(normalizeMessage);
+      if (controller.signal.aborted || requestId !== conversationRequestRef.current) return;
+
+      const latestConversation = currentConversationRef.current?.id === conversation.id
+        ? currentConversationRef.current
+        : conversation;
+      const withMessages = { ...latestConversation, messages, persisted: true };
+      currentConversationRef.current = withMessages;
+      setCurrentConversation(withMessages);
+      commitConversations((previous) => previous.map((item) => (
+        item.id === conversation.id ? { ...item, messages, persisted: true } : item
+      )));
+    } catch (error) {
+      if (controller.signal.aborted || requestId !== conversationRequestRef.current) return;
+      setConversationLoadError(error instanceof Error
+        ? error.message
+        : t('chat.loadMessagesFailed', { defaultValue: 'Failed to load this session.' }));
+    } finally {
+      if (requestId === conversationRequestRef.current) setIsConversationLoading(false);
+    }
+  }, [commitConversations, t]);
+
+  const handleConversationSelect = useCallback(async (conversation: Conversation) => {
+    await loadConversationMessages(conversation, true);
+  }, [loadConversationMessages]);
 
   const loadConversations = useCallback(async () => {
+    conversationsAbortRef.current?.abort();
+    const controller = new AbortController();
+    conversationsAbortRef.current = controller;
+    const conversationIdsAtStart = new Set(
+      conversationsRef.current.map((conversation) => conversation.id),
+    );
+    const requestedAtStart = getConversationIdFromUrl();
+    const needsDeepLinkLoad = Boolean(
+      requestedAtStart && currentConversationRef.current?.id !== requestedAtStart,
+    );
+    setConversationsState('loading');
+    setConversationsError(null);
+    if (needsDeepLinkLoad) {
+      setConversationLoadError(null);
+      setIsConversationLoading(true);
+    }
+
     try {
-      const response = await fetchWithAuth('/api/chat/conversations');
-      if (response.ok) {
-        const data = await response.json();
-        if (data.success && Array.isArray(data.conversations) && data.conversations.length > 0) {
-          const apiConversations = data.conversations.map((conv: any) => ({
-            ...conv,
-            created_at: new Date(conv.created_at)
-          }));
-          apiConversations.sort((a: any, b: any) => b.created_at.getTime() - a.created_at.getTime());
-          setConversations(apiConversations);
-          saveConversationsToStorage(apiConversations);
+      const response = await fetchWithAuth('/api/chat/conversations', { signal: controller.signal });
+      const result = await response.json().catch(() => ({})) as JsonRecord;
+      if (!response.ok || result.success !== true) {
+        throw new Error(getErrorMessage(result, t('chat.loadConversationsFailed', { defaultValue: 'Failed to load sessions.' })));
+      }
+      const rawList = Array.isArray(result.conversations)
+        ? result.conversations
+        : Array.isArray(result.data)
+          ? result.data
+          : [];
+      const next = rawList
+        .filter((value): value is JsonRecord => Boolean(value) && typeof value === 'object')
+        .map(normalizeConversation)
+        .filter((conversation) => Boolean(conversation.id))
+        .sort((left, right) => right.created_at.getTime() - left.created_at.getTime());
+      if (controller.signal.aborted) return;
+
+      // A first message can finish creating its conversation while this list
+      // request is in flight. Preserve those newer records instead of letting
+      // the older list snapshot erase the active stream from the sidebar.
+      const conversationsCreatedWhileLoading = conversationsRef.current.filter((conversation) => (
+        conversation.persisted !== false
+        && !conversationIdsAtStart.has(conversation.id)
+      ));
+      const concurrentById = new Map(
+        conversationsCreatedWhileLoading.map((conversation) => [conversation.id, conversation]),
+      );
+      const mergedServerNext = next.map((conversation) => {
+        const concurrent = concurrentById.get(conversation.id);
+        return concurrent
+          ? {
+            ...conversation,
+            messages: concurrent.messages,
+            provider: concurrent.provider || conversation.provider,
+            model: concurrent.model || conversation.model,
+          }
+          : conversation;
+      });
+      const resolvedNext = [
+        ...conversationsCreatedWhileLoading.filter((conversation) => (
+          !next.some((item) => item.id === conversation.id)
+        )),
+        ...mergedServerNext,
+      ];
+      conversationsRef.current = resolvedNext;
+      setConversations(resolvedNext);
+      saveConversationsToStorage(resolvedNext);
+      setConversationsState('ready');
+
+      const requestedId = getConversationIdFromUrl();
+      if (requestedId) {
+        const requested = resolvedNext.find((conversation) => conversation.id === requestedId);
+        if (requested) {
+          const wasCreatedWhileLoading = conversationsCreatedWhileLoading.some(
+            (conversation) => conversation.id === requestedId,
+          );
+          if (!wasCreatedWhileLoading && currentConversationRef.current?.id !== requestedId) {
+            await loadConversationMessages(requested, false);
+          }
+        } else if (currentConversationRef.current?.id !== requestedId) {
+          setCurrentConversation(null);
+          setConversationLoadError(t('chat.conversationNotFound', { defaultValue: 'This session no longer exists.' }));
+          setIsConversationLoading(false);
         }
+      } else if (needsDeepLinkLoad) {
+        setIsConversationLoading(false);
       }
     } catch (error) {
-      console.error('API call failed:', error);
-    }
-  }, [saveConversationsToStorage]);
-
-  const loadConversationMessages = useCallback(async (conversationId: string) => {
-    try {
-      const response = await fetchWithAuth(`/api/chat/conversations/${conversationId}/messages`);
-      if (response.ok) {
-        const result = await response.json();
-        if (result.success && result.data) {
-          return result.data.map((msg: any) => ({
-            id: msg.id,
-            content: msg.content,
-            role: msg.role,
-            timestamp: new Date(msg.created_at),
-            hasThinking: msg.has_thinking,
-            thinkingContent: msg.thinking_content,
-            thinkingTokens: msg.thinking_tokens,
-            reasoningEffort: msg.reasoning_effort,
-            thoughtSignature: msg.thought_signature
-          }));
-        }
-      }
-      return [];
-    } catch (error) {
-      console.error('Failed to load messages:', error);
-      return [];
-    }
-  }, []);
-
-  const checkUrlParams = useCallback(() => {
-    const urlParams = new URLSearchParams(window.location.search);
-    const conversationId = urlParams.get('conversation');
-    if (conversationId && conversations.length > 0) {
-      const conversation = conversations.find(conv => conv.id === conversationId);
-      if (conversation) {
-        setCurrentConversation(conversation);
+      if (controller.signal.aborted) return;
+      const message = error instanceof Error
+        ? error.message
+        : t('chat.loadConversationsFailed', { defaultValue: 'Failed to load sessions.' });
+      setConversationsState('error');
+      setConversationsError(message);
+      if (
+        needsDeepLinkLoad
+        && getConversationIdFromUrl() === requestedAtStart
+        && currentConversationRef.current?.id !== requestedAtStart
+      ) {
+        setConversationLoadError(message);
+        setIsConversationLoading(false);
       }
     }
-  }, [conversations]);
+  }, [loadConversationMessages, saveConversationsToStorage, t]);
 
-  // Initialize
   useEffect(() => {
     loadConversationsFromStorage();
     loadSelectedModel();
-    loadUserSettings().catch(console.error);
-    setTimeout(() => {
-      loadConversations().catch(console.error);
-    }, 1000);
-  }, []);
+    void Promise.all([loadUserSettings(), loadConversations()]);
+    return () => {
+      generationAbortRef.current?.abort();
+      conversationAbortRef.current?.abort();
+      conversationsAbortRef.current?.abort();
+      providerConfigAbortRef.current?.abort();
+    };
+  }, [loadConversations, loadConversationsFromStorage, loadSelectedModel, loadUserSettings]);
 
-  // Check URL params when conversations load
   useEffect(() => {
-    if (conversations.length > 0) {
-      checkUrlParams();
-    }
-  }, [conversations, checkUrlParams]);
-
-  // Sync localStorage changes
-  useEffect(() => {
-    const handleStorageChange = () => {
+    const handleStorageChange = (event: Event) => {
+      if (event instanceof StorageEvent && event.key && event.key !== 'selectedModel') return;
+      if (event instanceof CustomEvent && event.detail?.key && event.detail.key !== 'selectedModel') return;
       loadSelectedModel();
-      loadUserSettings();
-      loadConversationsFromStorage();
+      void loadUserSettings();
     };
     window.addEventListener('storage', handleStorageChange);
     window.addEventListener('localStorageChanged', handleStorageChange);
+    window.addEventListener('modelsUpdated', handleStorageChange);
     return () => {
       window.removeEventListener('storage', handleStorageChange);
       window.removeEventListener('localStorageChanged', handleStorageChange);
+      window.removeEventListener('modelsUpdated', handleStorageChange);
     };
-  }, [loadSelectedModel, loadUserSettings, loadConversationsFromStorage]);
+  }, [loadSelectedModel, loadUserSettings]);
 
-  // Auto-scroll
   useEffect(() => {
-    if (messagesEndRef.current) {
-      messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
-    }
+    const handlePopState = () => {
+      const conversationId = getConversationIdFromUrl();
+      if (!conversationId) {
+        viewRevisionRef.current += 1;
+        conversationAbortRef.current?.abort();
+        currentConversationRef.current = null;
+        setCurrentConversation(null);
+        setConversationLoadError(null);
+        setIsConversationLoading(false);
+        return;
+      }
+      const conversation = conversationsRef.current.find((item) => item.id === conversationId);
+      if (conversation) void loadConversationMessages(conversation, false);
+      else {
+        viewRevisionRef.current += 1;
+        conversationAbortRef.current?.abort();
+        currentConversationRef.current = null;
+        setCurrentConversation(null);
+        setIsConversationLoading(false);
+        setConversationLoadError(t('chat.conversationNotFound', { defaultValue: 'This session no longer exists.' }));
+      }
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, [loadConversationMessages, t]);
+
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [currentConversation?.messages]);
 
-  // Auto-resize textarea
   useEffect(() => {
-    if (textareaRef.current) {
-      textareaRef.current.style.height = 'auto';
-      textareaRef.current.style.height = `${textareaRef.current.scrollHeight}px`;
-    }
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+    textarea.style.height = 'auto';
+    textarea.style.height = `${textarea.scrollHeight}px`;
   }, [inputMessage]);
 
-  const handleSendMessage = useCallback(async () => {
-    if (!inputMessage.trim() || isLoading) return;
-
-    setIsLoading(true);
-    let conversation = currentConversation;
-
-    if (!conversation) {
-      conversation = {
-        id: self.crypto?.randomUUID?.() || Math.random().toString(36).substr(2, 9),
-        title: inputMessage.slice(0, 30) + (inputMessage.length > 30 ? '...' : ''),
-        messages: [],
-        created_at: new Date(),
-        provider: selectedModel?.provider || 'openai',
-        model: selectedModel?.model || 'gpt-3.5-turbo'
-      };
-
-      const newConversations = [conversation!, ...conversations];
-      setConversations(newConversations);
-      saveConversationsToStorage(newConversations);
-      setCurrentConversation(conversation);
-
-      fetchWithAuth('/api/chat/conversations', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          id: conversation.id,
-          title: conversation.title,
-          provider: conversation.provider,
-          model: conversation.model
-        })
-      }).catch(error => console.error('Failed to create conversation:', error));
-
-      const url = new URL(window.location.href);
-      url.searchParams.set('conversation', conversation.id);
-      window.history.replaceState({}, '', url.toString());
+  const forkCurrentConversation = useCallback(async () => {
+    const conversation = currentConversationRef.current;
+    if (!conversation || conversation.persisted === false) {
+      throw new Error(t('chat.noConversationToFork', { defaultValue: 'No saved session to fork.' }));
     }
 
-    const userMessage: Message = {
-      id: self.crypto?.randomUUID?.() || Math.random().toString(36).substr(2, 9),
-      content: inputMessage,
-      role: 'user',
-      timestamp: new Date()
-    };
+    const response = await fetchWithAuth(`/api/chat/conversations/${encodeURIComponent(conversation.id)}/fork`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    });
+    const result = await response.json().catch(() => ({})) as JsonRecord;
+    if (!response.ok || result.success !== true) {
+      throw new Error(getErrorMessage(result, t('chat.forkFailed', { defaultValue: 'Failed to fork session.' })));
+    }
 
-    const updatedConversation = {
-      ...conversation,
-      provider: selectedModel?.provider || 'openai',
-      model: selectedModel?.model || 'gpt-3.5-turbo',
-      messages: [...conversation.messages, userMessage]
-    };
-
-    setCurrentConversation(updatedConversation);
-    setConversations(prevConversations => {
-      const newConversations = prevConversations.map(conv =>
-        conv.id === conversation!.id ? updatedConversation : conv
-      );
-      saveConversationsToStorage(newConversations);
-      return newConversations;
+    const rawConversation = (result.conversation || (result.data as JsonRecord | undefined)?.conversation) as JsonRecord | undefined;
+    const rawMessages = (result.messages || (result.data as JsonRecord | undefined)?.messages) as unknown;
+    if (!rawConversation) throw new Error(t('chat.forkFailed', { defaultValue: 'Failed to fork session.' }));
+    const forked = normalizeConversation({
+      ...rawConversation,
+      messages: Array.isArray(rawMessages) ? rawMessages : [],
     });
 
-    setInputMessage('');
+    viewRevisionRef.current += 1;
+    conversationAbortRef.current?.abort();
+    conversationRequestRef.current += 1;
+    currentConversationRef.current = forked;
+    setCurrentConversation(forked);
+    commitConversations((previous) => [forked, ...previous.filter((item) => item.id !== forked.id)]);
+    updateConversationUrl(forked.id);
+    return forked;
+  }, [commitConversations, t]);
 
-    const aiMessageId = self.crypto?.randomUUID?.() || Math.random().toString(36).substr(2, 9);
-    const aiMessage: Message = {
-      id: aiMessageId,
+  const handleSendMessage = useCallback(async () => {
+    const text = inputMessage.trim();
+    const providerReady = Boolean(selectedModel && configuredProviders.includes(selectedModel.provider));
+    if (!text || isLoading || !selectedModel || !providerReady) return;
+    const viewRevision = ++viewRevisionRef.current;
+
+    const existing = currentConversationRef.current;
+    const isSavedConversation = Boolean(existing && existing.persisted !== false && !existing.id.startsWith('draft-'));
+    const localConversationId = isSavedConversation ? existing!.id : randomId('draft-');
+    const userMessage: Message = {
+      id: randomId('user-'),
+      content: text,
+      role: 'user',
+      timestamp: new Date(),
+      status: 'complete',
+    };
+    const assistantMessageId = randomId('assistant-');
+    const assistantMessage: Message = {
+      id: assistantMessageId,
       content: '',
       role: 'assistant',
       timestamp: new Date(),
-      isTyping: true
+      isTyping: true,
+      status: 'streaming',
+    };
+    const baseMessages = isSavedConversation ? existing!.messages : [];
+    const optimisticConversation: Conversation = {
+      id: localConversationId,
+      title: isSavedConversation
+        ? existing!.title
+        : `${text.slice(0, 30)}${text.length > 30 ? '...' : ''}`,
+      messages: [...baseMessages, userMessage, assistantMessage],
+      created_at: isSavedConversation ? existing!.created_at : new Date(),
+      provider: selectedModel.provider,
+      model: selectedModel.model,
+      persisted: isSavedConversation,
     };
 
-    const conversationWithAiMessage = {
-      ...updatedConversation,
-      messages: [...updatedConversation.messages, aiMessage]
+    setConversationLoadError(null);
+    currentConversationRef.current = optimisticConversation;
+    setCurrentConversation(optimisticConversation);
+    if (isSavedConversation) {
+      commitConversations((previous) => previous.map((conversation) => (
+        conversation.id === existing!.id ? optimisticConversation : conversation
+      )));
+    }
+    setInputMessage('');
+    setIsLoading(true);
+
+    const controller = new AbortController();
+    generationAbortRef.current = controller;
+    let serverConversationId = isSavedConversation ? existing!.id : '';
+    let fullContent = '';
+    let fullThinkingContent = '';
+    let thinkingTokens: number | undefined;
+    let reasoningEffort: string | undefined;
+    let thoughtSignature: string | undefined;
+    let streamFinished = false;
+    let streamTimedOut = false;
+
+    const matchesActiveTurn = (conversation: Conversation) => (
+      conversation.id === localConversationId || conversation.id === serverConversationId
+    );
+
+    const updateAssistant = (patch: Partial<Message>) => {
+      const update = (conversation: Conversation): Conversation => ({
+        ...conversation,
+        messages: conversation.messages.map((message) => (
+          message.id === assistantMessageId ? { ...message, ...patch } : message
+        )),
+      });
+      setCurrentConversation((previous) => {
+        const next = previous && matchesActiveTurn(previous) ? update(previous) : previous;
+        currentConversationRef.current = next;
+        return next;
+      });
+      setConversations((previous) => {
+        const next = previous.map((conversation) => (
+          matchesActiveTurn(conversation) ? update(conversation) : conversation
+        ));
+        conversationsRef.current = next;
+        return next;
+      });
     };
-    setCurrentConversation(conversationWithAiMessage);
-    setConversations(prevConversations => {
-      const updatedConversations = prevConversations.map(conv =>
-        conv.id === conversation!.id ? conversationWithAiMessage : conv
+
+    const applyConversationMetadata = (conversationId: string, title?: string) => {
+      if (!conversationId) return;
+      serverConversationId = conversationId;
+      const convert = (conversation: Conversation): Conversation => ({
+        ...conversation,
+        id: conversationId,
+        title: title?.trim() || conversation.title,
+        provider: selectedModel.provider,
+        model: selectedModel.model,
+        persisted: true,
+      });
+      const activeConversation = currentConversationRef.current;
+      const convertedTurn = convert(
+        activeConversation && matchesActiveTurn(activeConversation)
+          ? activeConversation
+          : optimisticConversation,
       );
-      saveConversationsToStorage(updatedConversations);
-      return updatedConversations;
-    });
+      if (activeConversation && matchesActiveTurn(activeConversation)) {
+        currentConversationRef.current = convertedTurn;
+        setCurrentConversation(convertedTurn);
+      }
+      const previous = conversationsRef.current;
+      const existingIndex = previous.findIndex((conversation) => matchesActiveTurn(conversation));
+      const next = existingIndex >= 0
+        ? previous.map((conversation, index) => index === existingIndex
+          ? { ...convert(conversation), messages: convertedTurn.messages }
+          : conversation)
+        : [convertedTurn, ...previous];
+      conversationsRef.current = next;
+      setConversations(next);
+      if (viewRevisionRef.current === viewRevision) updateConversationUrl(conversationId);
+    };
 
     try {
       const url = new URL('/api/chat', window.location.origin);
       url.searchParams.set('stream', 'true');
+      const body: JsonRecord = {
+        message: text,
+        provider: selectedModel.provider,
+        model: selectedModel.model,
+        parameters: aiParameters,
+      };
+      if (isSavedConversation) body.conversationId = existing!.id;
 
       const response = await fetchWithAuth(url.toString(), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          message: inputMessage,
-          provider: updatedConversation.provider,
-          model: updatedConversation.model,
-          conversationId: updatedConversation.id,
-          parameters: aiParameters
-        })
+        body: JSON.stringify(body),
+        signal: controller.signal,
       });
-
       if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
-        throw new Error(`${t('chat.sendMessageError')}: ${errorData.error || response.statusText}`);
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(getErrorMessage(payload, `${t('chat.sendMessageError')} (${response.status})`));
       }
 
-      const contentType = response.headers.get('content-type');
-      if (contentType && contentType.includes('text/event-stream')) {
+      const contentType = response.headers.get('content-type') || '';
+      if (contentType.includes('text/event-stream')) {
         const reader = response.body?.getReader();
+        if (!reader) throw new Error(t('chat.emptyStream', { defaultValue: 'The server returned an empty stream.' }));
         const decoder = new TextDecoder();
         let buffer = '';
-        let fullContent = '';
-        let fullThinkingContent = '';
-        let thinkingTokens: number | undefined;
-        let reasoningEffort: string | undefined;
-        let thoughtSignature: string | undefined;
 
-        if (reader) {
-          let streamTimedOut = false;
-          try {
-            let streamTimeout: NodeJS.Timeout | null = null;
-            let lastChunkTime = Date.now();
-            let streamCompleted = false;
-            const STREAM_IDLE_TIMEOUT_MS = 120000;
-            const STREAM_TIMEOUT_CHECK_INTERVAL_MS = 5000;
-
-            const clearStreamTimeout = () => {
-              if (streamTimeout) { clearTimeout(streamTimeout); streamTimeout = null; }
-            };
-
-            const restartStreamTimeout = () => {
-              clearStreamTimeout();
-              streamTimeout = setTimeout(() => {
-                if (Date.now() - lastChunkTime > STREAM_IDLE_TIMEOUT_MS) {
-                  streamTimedOut = true;
-                  void reader.cancel();
-                  return;
-                }
-                restartStreamTimeout();
-              }, STREAM_TIMEOUT_CHECK_INTERVAL_MS);
-            };
-
-            const applyMessageUpdate = (messageUpdater: (msg: any) => any) => {
-              setCurrentConversation(prev => {
-                if (!prev) return prev;
-                return { ...prev, messages: prev.messages.map(messageUpdater) };
-              });
-              setConversations(prev =>
-                prev.map(conv =>
-                  conv.id === conversation!.id
-                    ? { ...conv, messages: conv.messages.map(messageUpdater) }
-                    : conv
-                )
-              );
-            };
-
-            const processStreamDataLine = (dataStr: string): boolean => {
-              if (dataStr === '[DONE]') {
-                streamCompleted = true;
-                applyMessageUpdate(msg =>
-                  msg.id === aiMessageId
-                    ? { ...msg, content: fullContent, isTyping: false, hasThinking: !!fullThinkingContent, thinkingContent: fullThinkingContent || undefined, thinkingTokens, reasoningEffort, thoughtSignature }
-                    : msg
-                );
-                clearStreamTimeout();
-                return true;
-              }
-
-              try {
-                const data = JSON.parse(dataStr);
-                if (data.error) {
-                  streamCompleted = true;
-                  applyMessageUpdate(msg =>
-                    msg.id === aiMessageId ? { ...msg, content: `${t('chat.sendError')}${data.error}`, isTyping: false } : msg
-                  );
-                  clearStreamTimeout();
-                  return true;
-                }
-
-                if (data.content !== undefined) fullContent += data.content;
-                if (data.thinking?.content) fullThinkingContent += data.thinking.content;
-                if (data.thinking?.tokens !== undefined) thinkingTokens = data.thinking.tokens;
-                if (data.thinking?.effort) reasoningEffort = data.thinking.effort;
-                if (data.thinking?.signature) thoughtSignature = data.thinking.signature;
-
-                applyMessageUpdate(msg =>
-                  msg.id === aiMessageId
-                    ? { ...msg, content: fullContent, isTyping: !data.done, hasThinking: !!fullThinkingContent, thinkingContent: fullThinkingContent || undefined, thinkingTokens, reasoningEffort, thoughtSignature }
-                    : msg
-                );
-
-                if (data.done) { streamCompleted = true; clearStreamTimeout(); return true; }
-              } catch (e) {
-                console.warn('Failed to parse SSE data:', e);
-              }
-              return false;
-            };
-
-            const processBufferedLines = (rawBuffer: string): { shouldStop: boolean; remainder: string } => {
-              const lines = rawBuffer.split('\n');
-              const remainder = lines.pop() || '';
-              for (const line of lines) {
-                if (!line.startsWith('data: ')) continue;
-                if (processStreamDataLine(line.slice(6).trim())) return { shouldStop: true, remainder: '' };
-              }
-              return { shouldStop: false, remainder };
-            };
-
-            restartStreamTimeout();
-            while (true) {
-              const { done, value } = await reader.read();
-              if (done) {
-                buffer += decoder.decode();
-                if (buffer.trim()) {
-                  for (const line of buffer.split('\n')) {
-                    if (!line.startsWith('data: ')) continue;
-                    if (processStreamDataLine(line.slice(6).trim())) { clearStreamTimeout(); return; }
-                  }
-                }
-                break;
-              }
-              lastChunkTime = Date.now();
-              buffer += decoder.decode(value, { stream: true });
-              const processed = processBufferedLines(buffer);
-              buffer = processed.remainder;
-              if (processed.shouldStop) { clearStreamTimeout(); return; }
-              restartStreamTimeout();
-            }
-            clearStreamTimeout();
-
-            if (streamTimedOut && !streamCompleted) {
-              throw new Error(t('chat.streamTimeout', { defaultValue: 'Stream response timed out, please retry.' }));
-            }
-          } catch (streamError) {
-            const errorMessage = streamError instanceof Error
-              ? `${t('chat.sendError')}${streamError.message}`
-              : `${t('chat.sendError')}${t('chat.unknownError')}`;
-            const interruptedNotice = t('chat.partialResponseNotice', { defaultValue: '\n\n[Connection interrupted, response may be incomplete]' });
-            const displayContent = fullContent
-              ? (streamTimedOut ? `${fullContent}${interruptedNotice}` : fullContent)
-              : errorMessage;
-
-            const errorUpdater = (msg: any) =>
-              msg.id === aiMessageId ? { ...msg, content: displayContent, isTyping: false } : msg;
-            setCurrentConversation(prev => prev ? { ...prev, messages: prev.messages.map(errorUpdater) } : prev);
-            setConversations(prev => prev.map(conv =>
-              conv.id === conversation!.id ? { ...conv, messages: conv.messages.map(errorUpdater) } : conv
-            ));
-          } finally {
-            try { reader.releaseLock(); } catch { /* ignore */ }
+        const processData = (dataText: string) => {
+          if (!dataText) return;
+          if (dataText === '[DONE]') {
+            streamFinished = true;
+            updateAssistant({
+              content: fullContent,
+              isTyping: false,
+              status: 'complete',
+              error: undefined,
+              hasThinking: Boolean(fullThinkingContent),
+              thinkingContent: fullThinkingContent || undefined,
+              thinkingTokens,
+              reasoningEffort,
+              thoughtSignature,
+            });
+            return;
           }
+          const data = JSON.parse(dataText) as JsonRecord;
+          if (data.type === 'conversation') {
+            applyConversationMetadata(getString(data.conversationId), getString(data.title));
+            return;
+          }
+          if (typeof data.error === 'string') throw new Error(data.error);
+          if (typeof data.content === 'string') fullContent += data.content;
+          const thinking = data.thinking && typeof data.thinking === 'object' ? data.thinking as JsonRecord : null;
+          if (thinking && typeof thinking.content === 'string') fullThinkingContent += thinking.content;
+          if (thinking && typeof thinking.tokens === 'number') thinkingTokens = thinking.tokens;
+          if (thinking && typeof thinking.effort === 'string') reasoningEffort = thinking.effort;
+          if (thinking && typeof thinking.signature === 'string') thoughtSignature = thinking.signature;
+          updateAssistant({
+            content: fullContent,
+            isTyping: true,
+            status: 'streaming',
+            hasThinking: Boolean(fullThinkingContent),
+            thinkingContent: fullThinkingContent || undefined,
+            thinkingTokens,
+            reasoningEffort,
+            thoughtSignature,
+          });
+        };
+
+        const processBuffer = (flush = false) => {
+          const lines = buffer.split(/\r?\n/);
+          buffer = flush ? '' : lines.pop() || '';
+          for (const line of lines) {
+            if (!line.startsWith('data:')) continue;
+            processData(line.slice(5).trim());
+          }
+        };
+
+        try {
+          while (!streamFinished) {
+            const { done, value } = await readWithTimeout(reader);
+            if (done) {
+              buffer += decoder.decode();
+              processBuffer(true);
+              break;
+            }
+            buffer += decoder.decode(value, { stream: true });
+            processBuffer();
+          }
+          if (!streamFinished) {
+            throw new Error(t('chat.partialResponseNotice', { defaultValue: 'The connection closed before the response completed.' }));
+          }
+        } catch (error) {
+          if (error instanceof Error && error.message === 'STREAM_IDLE_TIMEOUT') {
+            streamTimedOut = true;
+            controller.abort();
+            throw new Error(t('chat.streamTimeout', { defaultValue: 'The response timed out. You can retry the message.' }));
+          }
+          throw error;
+        } finally {
+          try { reader.releaseLock(); } catch { /* stream already released */ }
         }
       } else {
-        const data = await response.json();
-        if (data.success) {
-          const aiMsg = data.data?.aiMessage;
-          const updater = (msg: any) =>
-            msg.id === aiMessageId
-              ? { ...msg, content: data.response, isTyping: false, hasThinking: aiMsg?.has_thinking || false, thinkingContent: aiMsg?.thinking_content, thinkingTokens: aiMsg?.thinking_tokens, reasoningEffort: aiMsg?.reasoning_effort, thoughtSignature: aiMsg?.thought_signature }
-              : msg;
-          setCurrentConversation(prev => prev ? { ...prev, messages: prev.messages.map(updater) } : prev);
-          setConversations(prev => prev.map(conv =>
-            conv.id === conversation!.id ? { ...conv, messages: conv.messages.map(updater) } : conv
-          ));
-          if (data.conversationId && !conversation.id) {
-            setCurrentConversation(prev => prev ? { ...prev, id: data.conversationId } : prev);
-          }
-        } else {
-          throw new Error(data.error || 'Unknown error');
-        }
+        const data = await response.json() as JsonRecord;
+        if (data.success !== true) throw new Error(getErrorMessage(data, t('chat.unknownError')));
+        applyConversationMetadata(getString(data.conversationId), getString(data.title));
+        const aiMessage = data.data && typeof data.data === 'object'
+          ? (data.data as JsonRecord).aiMessage as JsonRecord | undefined
+          : undefined;
+        fullContent = getString(data.response ?? aiMessage?.content);
+        updateAssistant({
+          content: fullContent,
+          isTyping: false,
+          status: 'complete',
+          hasThinking: Boolean(aiMessage?.has_thinking),
+          thinkingContent: getString(aiMessage?.thinking_content) || undefined,
+          thinkingTokens: typeof aiMessage?.thinking_tokens === 'number' ? aiMessage.thinking_tokens : undefined,
+          reasoningEffort: getString(aiMessage?.reasoning_effort) || undefined,
+          thoughtSignature: getString(aiMessage?.thought_signature) || undefined,
+        });
+        streamFinished = true;
       }
-    } catch (error: unknown) {
-      const errorMessage = `${t('chat.sendError')}${error instanceof Error ? error.message : t('chat.unknownError')}`;
-      const errorUpdater = (msg: any) =>
-        msg.id === aiMessageId ? { ...msg, content: errorMessage, isTyping: false } : msg;
-      setCurrentConversation(prev => prev ? { ...prev, messages: prev.messages.map(errorUpdater) } : prev);
-      setConversations(prev => prev.map(conv =>
-        conv.id === conversation!.id ? { ...conv, messages: conv.messages.map(errorUpdater) } : conv
-      ));
+    } catch (error) {
+      const wasStopped = controller.signal.aborted && !streamTimedOut;
+      const message = wasStopped
+        ? t('chat.stoppedResponseNotice', { defaultValue: 'Stopped by you. The partial response was not added to future context.' })
+        : error instanceof Error
+          ? error.message
+          : t('chat.unknownError');
+      updateAssistant({
+        content: fullContent,
+        isTyping: false,
+        status: wasStopped ? 'cancelled' : 'error',
+        error: message,
+        hasThinking: Boolean(fullThinkingContent),
+        thinkingContent: fullThinkingContent || undefined,
+        thinkingTokens,
+        reasoningEffort,
+        thoughtSignature,
+      });
+      setInputMessage((current) => current || text);
     } finally {
+      if (generationAbortRef.current === controller) generationAbortRef.current = null;
       setIsLoading(false);
-      const finalUpdater = (msg: any) =>
-        msg.id === aiMessageId ? { ...msg, isTyping: false } : msg;
-      setCurrentConversation(prev => prev ? { ...prev, messages: prev.messages.map(finalUpdater) } : prev);
-      setConversations(prev => prev.map(conv =>
-        conv.id === conversation!.id ? { ...conv, messages: conv.messages.map(finalUpdater) } : conv
-      ));
+      setConversations((previous) => {
+        saveConversationsToStorage(previous);
+        return previous;
+      });
     }
-  }, [inputMessage, isLoading, currentConversation, selectedModel, conversations, aiParameters, t, saveConversationsToStorage]);
+  }, [aiParameters, commitConversations, configuredProviders, inputMessage, isLoading, saveConversationsToStorage, selectedModel, t]);
 
-  const handleKeyPress = useCallback((e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      handleSendMessage();
+  const stopGeneration = useCallback(() => {
+    generationAbortRef.current?.abort();
+  }, []);
+
+  const handleKeyPress = useCallback((event: React.KeyboardEvent) => {
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault();
+      void handleSendMessage();
     }
   }, [handleSendMessage]);
 
   const createNewConversation = useCallback(() => {
+    viewRevisionRef.current += 1;
+    conversationAbortRef.current?.abort();
+    currentConversationRef.current = null;
     setCurrentConversation(null);
+    setConversationLoadError(null);
+    setIsConversationLoading(false);
     setInputMessage('');
-    const url = new URL(window.location.href);
-    url.searchParams.delete('conversation');
-    window.history.replaceState({}, '', url.toString());
+    updateConversationUrl();
+    queueMicrotask(() => textareaRef.current?.focus());
   }, []);
 
   const clearAllConversations = useCallback(async () => {
-    try {
-      const conversationIds = conversations.map(conv => conv.id);
-      for (const id of conversationIds) {
-        await fetchWithAuth(`/api/chat/conversations/${id}`, { method: 'DELETE' });
-      }
-      setConversations([]);
-      setCurrentConversation(null);
-      saveConversationsToStorage([]);
-      const url = new URL(window.location.href);
-      url.searchParams.delete('conversation');
-      window.history.replaceState({}, '', url.toString());
-    } catch (error) {
-      console.error('Failed to clear history:', error);
-      throw error;
+    if (isLoading) {
+      throw new Error(t('chat.stopBeforeDelete', { defaultValue: 'Stop the active generation before clearing sessions.' }));
     }
-  }, [conversations, saveConversationsToStorage]);
+    const response = await fetchWithAuth('/api/chat/conversations', { method: 'DELETE' });
+    const result = await response.json().catch(() => ({})) as JsonRecord;
+    if (!response.ok || result.success !== true) {
+      throw new Error(getErrorMessage(result, t('chat.clearFailed', { defaultValue: 'Failed to clear sessions.' })));
+    }
+    conversationsAbortRef.current?.abort();
+    conversationAbortRef.current?.abort();
+    conversationRequestRef.current += 1;
+    setConversations([]);
+    conversationsRef.current = [];
+    viewRevisionRef.current += 1;
+    currentConversationRef.current = null;
+    setCurrentConversation(null);
+    setConversationsState('ready');
+    setConversationsError(null);
+    setConversationLoadError(null);
+    setIsConversationLoading(false);
+    saveConversationsToStorage([]);
+    updateConversationUrl();
+  }, [isLoading, saveConversationsToStorage, t]);
+
+  const renameConversation = useCallback(async (conversationId: string, title: string) => {
+    const nextTitle = title.trim();
+    if (!nextTitle || nextTitle.length > 120) {
+      throw new Error(t('chat.invalidTitle', { defaultValue: 'Session titles must be between 1 and 120 characters.' }));
+    }
+    const response = await fetchWithAuth(`/api/chat/conversations/${encodeURIComponent(conversationId)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: nextTitle }),
+    });
+    const result = await response.json().catch(() => ({})) as JsonRecord;
+    if (!response.ok || result.success !== true) {
+      throw new Error(getErrorMessage(result, t('chat.renameFailed', { defaultValue: 'Failed to rename session.' })));
+    }
+    conversationsAbortRef.current?.abort();
+    commitConversations((previous) => previous.map((conversation) => (
+      conversation.id === conversationId ? { ...conversation, title: nextTitle } : conversation
+    )));
+    setCurrentConversation((previous) => {
+      const next = previous?.id === conversationId ? { ...previous, title: nextTitle } : previous;
+      currentConversationRef.current = next;
+      return next;
+    });
+  }, [commitConversations, t]);
+
+  const deleteConversation = useCallback(async (conversationId: string) => {
+    if (isLoading) {
+      throw new Error(t('chat.stopBeforeDelete', { defaultValue: 'Stop the active generation before deleting sessions.' }));
+    }
+    const response = await fetchWithAuth(`/api/chat/conversations/${encodeURIComponent(conversationId)}`, { method: 'DELETE' });
+    const result = await response.json().catch(() => ({})) as JsonRecord;
+    if (!response.ok || result.success !== true) {
+      throw new Error(getErrorMessage(result, t('chat.deleteFailed', { defaultValue: 'Failed to delete session.' })));
+    }
+    conversationsAbortRef.current?.abort();
+    commitConversations((previous) => previous.filter((conversation) => conversation.id !== conversationId));
+    if (currentConversationRef.current?.id === conversationId) {
+      conversationAbortRef.current?.abort();
+      conversationRequestRef.current += 1;
+      viewRevisionRef.current += 1;
+      currentConversationRef.current = null;
+      setCurrentConversation(null);
+      setConversationLoadError(null);
+      setIsConversationLoading(false);
+      updateConversationUrl();
+    }
+    setConversationsState('ready');
+    setConversationsError(null);
+  }, [commitConversations, isLoading, t]);
+
+  const retryCurrentConversation = useCallback(() => {
+    const conversationId = currentConversationRef.current?.id || getConversationIdFromUrl();
+    const conversation = conversationsRef.current.find((item) => item.id === conversationId);
+    if (conversation) void loadConversationMessages(conversation, false);
+    else void loadConversations();
+  }, [loadConversationMessages, loadConversations]);
 
   const formatTime = useCallback((date: Date) => {
-    const now = new Date();
-    const diffTime = Math.abs(now.getTime() - date.getTime());
-    const diffMinutes = Math.ceil(diffTime / (1000 * 60));
+    const value = new Date(date);
+    if (Number.isNaN(value.getTime())) return '';
+    const diffMinutes = Math.max(0, Math.floor((Date.now() - value.getTime()) / 60_000));
     if (diffMinutes < 60) return t('time.minutesAgo', { count: diffMinutes });
     if (diffMinutes < 1440) return t('time.hoursAgo', { count: Math.floor(diffMinutes / 60) });
-    return date.toLocaleDateString();
+    return value.toLocaleDateString();
   }, [t]);
-
-  const handleConversationSelect = useCallback(async (conversation: Conversation) => {
-    const messages = await loadConversationMessages(conversation.id);
-    const conversationWithMessages = { ...conversation, messages };
-    setCurrentConversation(conversationWithMessages);
-    const updatedConversations = conversations.map(conv =>
-      conv.id === conversation.id ? conversationWithMessages : conv
-    );
-    setConversations(updatedConversations);
-    saveConversationsToStorage(updatedConversations);
-    const url = new URL(window.location.href);
-    url.searchParams.set('conversation', conversation.id);
-    window.history.replaceState({}, '', url.toString());
-  }, [conversations, loadConversationMessages, saveConversationsToStorage]);
 
   return {
     conversations,
@@ -581,15 +953,28 @@ export function useChat() {
     setInputMessage,
     isLoading,
     selectedModel,
+    providerReady: Boolean(selectedModel && configuredProviders.includes(selectedModel.provider)),
+    providerConfigState,
+    providerConfigError,
     aiParameters,
     setAiParameters,
     messagesEndRef,
     textareaRef,
+    conversationsState,
+    conversationsError,
+    isConversationLoading,
+    conversationLoadError,
     handleModelChange,
     handleSendMessage,
+    stopGeneration,
     handleKeyPress,
     createNewConversation,
+    forkCurrentConversation,
     clearAllConversations,
+    renameConversation,
+    deleteConversation,
+    retryConversations: loadConversations,
+    retryCurrentConversation,
     formatTime,
     handleConversationSelect,
   };

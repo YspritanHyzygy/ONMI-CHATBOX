@@ -29,7 +29,7 @@ export function authHeaders(extra: Record<string, string> = {}): Record<string, 
 /**
  * 带认证的 fetch — 自动注入 Authorization header
  */
-export function fetchWithAuth(url: string, init?: RequestInit): Promise<Response> {
+export async function fetchWithAuth(url: string, init?: RequestInit): Promise<Response> {
   const token = getAuthToken();
   const headers = new Headers(init?.headers);
 
@@ -40,5 +40,14 @@ export function fetchWithAuth(url: string, init?: RequestInit): Promise<Response
     headers.set('Content-Type', 'application/json');
   }
 
-  return fetch(url, { ...init, headers });
+  const response = await fetch(url, { ...init, headers });
+
+  if (response.status === 401 && token) {
+    useAuthStore.getState().logout();
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('auth:unauthorized'));
+    }
+  }
+
+  return response;
 }

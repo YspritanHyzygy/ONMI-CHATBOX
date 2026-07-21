@@ -42,6 +42,8 @@ export default function ModelSelector({ selectedModel, onModelChange, className 
   const [error, setError] = useState<string | null>(null);
   const isInitialMount = useRef(true);
   const isFetchingModels = useRef(false);
+  const selectedModelRef = useRef(selectedModel);
+  selectedModelRef.current = selectedModel;
 
   const fetchModels = useCallback(async () => {
     if (isFetchingModels.current) return;
@@ -149,9 +151,10 @@ export default function ModelSelector({ selectedModel, onModelChange, className 
         }
 
         if (modelToSelect && isInitialMount.current) {
-          if (!selectedModel ||
-              selectedModel.model !== modelToSelect.model ||
-              selectedModel.provider !== modelToSelect.provider) {
+          const currentSelection = selectedModelRef.current;
+          if (!currentSelection ||
+              currentSelection.model !== modelToSelect.model ||
+              currentSelection.provider !== modelToSelect.provider) {
             const toSelect = modelToSelect;
             queueMicrotask(() => { onModelChange(toSelect); });
           }
@@ -168,14 +171,14 @@ export default function ModelSelector({ selectedModel, onModelChange, className 
       setLoading(false);
       isFetchingModels.current = false;
     }
-  }, [onModelChange, selectedModel, t]);
+  }, [onModelChange, t]);
 
   useEffect(() => {
     fetchModels();
     const handleModelsUpdated = () => fetchModels();
     window.addEventListener('modelsUpdated', handleModelsUpdated);
     return () => window.removeEventListener('modelsUpdated', handleModelsUpdated);
-  }, []);
+  }, [fetchModels]);
 
   // Close the popover when the viewport crosses the md breakpoint —
   // otherwise the floating panel keeps its old anchor coordinates after
@@ -240,8 +243,13 @@ export default function ModelSelector({ selectedModel, onModelChange, className 
 
   if (error || Object.keys(groupedModels).length === 0) {
     return (
-      <div className={cn('text-sm text-destructive', className)}>
-        {error || t('modelSelector.configureFirst')}
+      <div className={cn('flex min-w-0 items-center gap-2 text-sm text-destructive', className)}>
+        <span className="min-w-0 truncate" title={error || t('modelSelector.configureFirst')}>{error || t('modelSelector.configureFirst')}</span>
+        {error && (
+          <Button className="h-7 shrink-0 px-2" variant="outline" size="sm" onClick={() => void fetchModels()}>
+            {t('common.retry', { defaultValue: 'Retry' })}
+          </Button>
+        )}
       </div>
     );
   }

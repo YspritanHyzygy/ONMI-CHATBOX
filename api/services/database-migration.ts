@@ -1,173 +1,75 @@
-/**
- * 数据库迁移工具
- * 用于确保数据库结构的向后兼容性和数据完整性
- */
+import {
+  CURRENT_DATABASE_VERSION,
+  JSONDatabase,
+  jsonDatabase
+} from './json-database.js';
 
-import { jsonDatabase } from './json-database.js';
-
-/**
- * 迁移版本号
- */
-const CURRENT_VERSION = 2; // 版本2: 添加思维链支持
+export { CURRENT_DATABASE_VERSION };
 
 /**
- * 数据库版本信息
+ * Run every schema migration in order. JSONDatabase.applyMigration creates a
+ * byte-for-byte backup before changing the in-memory data and records the
+ * completed migration in the database file.
  */
-interface DatabaseVersion {
-  version: number;
-  migrated_at: string;
-  description: string;
-}
+export async function runMigrations(database: JSONDatabase = jsonDatabase): Promise<void> {
+  await database.init();
 
-/**
- * 检查并执行必要的数据库迁移
- */
-export async function runMigrations(): Promise<void> {
-  console.log('[Migration] Checking database version...');
-  
-  try {
-    // 初始化数据库
-    await jsonDatabase.init();
-    
-    // 获取当前版本
-    const currentVersion = await getDatabaseVersion();
-    
-    if (currentVersion >= CURRENT_VERSION) {
-      console.log(`[Migration] Database is up to date (v${currentVersion})`);
-      return;
-    }
-    
-    console.log(`[Migration] Migrating from v${currentVersion} to v${CURRENT_VERSION}...`);
-    
-    // 执行迁移
-    if (currentVersion < 2) {
-      await migrateToV2();
-    }
-    
-    // 更新版本号
-    await setDatabaseVersion(CURRENT_VERSION, 'Added thinking chain support');
-    
-    console.log('[Migration] Migration completed successfully');
-  } catch (error) {
-    console.error('[Migration] Migration failed:', error);
-    throw error;
-  }
-}
-
-/**
- * 获取数据库版本
- */
-async function getDatabaseVersion(): Promise<number> {
-  try {
-    const result = jsonDatabase.from('custom_models').select();
-    const versionRecord = result.data?.find((item: any) => item.type === 'db_version');
-    return versionRecord?.version || 1;
-  } catch (error) {
-    console.warn('[Migration] Failed to get version, assuming v1:', error);
-    return 1;
-  }
-}
-
-/**
- * 设置数据库版本
- */
-async function setDatabaseVersion(version: number, description: string): Promise<void> {
-  try {
-    const result = jsonDatabase.from('custom_models').select();
-    const versionRecord = result.data?.find((item: any) => item.type === 'db_version');
-    
-    const versionData: DatabaseVersion = {
-      version,
-      migrated_at: new Date().toISOString(),
-      description
-    };
-    
-    if (versionRecord) {
-      // 更新现有版本记录
-      await jsonDatabase.from('custom_models').update({
-        ...versionData,
-        type: 'db_version'
-      }).eq('id', versionRecord.id);
-    } else {
-      // 创建新版本记录
-      await jsonDatabase.from('custom_models').insert({
-        type: 'db_version',
-        ...versionData
-      });
-    }
-  } catch (error) {
-    console.error('[Migration] Failed to set version:', error);
-    throw error;
-  }
-}
-
-/**
- * 迁移到版本2：添加思维链支持
- */
-async function migrateToV2(): Promise<void> {
-  console.log('[Migration] Migrating to v2: Adding thinking chain support...');
-  
-  try {
-    const messagesResult = jsonDatabase.from('messages').select();
-    const messages = messagesResult.data || [];
-    
-    let updatedCount = 0;
-    
-    // 为所有现有消息添加默认的思维链字段
-    for (const message of messages) {
-      // 只更新没有思维链字段的消息
-      if (message.has_thinking === undefined) {
-        await jsonDatabase.from('messages').update({
+  if (database.getDatabaseVersion() < 2) {
+    await database.applyMigration(2, 'Added thinking-chain message fields', (draft) => {
+      draft.messages = draft.messages.map((message) => {
+        if (message.has_thinking !== undefined) {
+          return message;
+        }
+        return {
+          ...message,
           has_thinking: false,
-          thinking_content: undefined,
-          thinking_tokens: undefined,
-          reasoning_effort: undefined,
-          thought_signature: undefined,
-          model_provider: message.provider || undefined,
-          output_tokens: undefined
-        }).eq('id', message.id);
-        
-        updatedCount++;
-      }
-    }
-    
-    console.log(`[Migration] Updated ${updatedCount} messages with thinking chain fields`);
-  } catch (error) {
-    console.error('[Migration] Failed to migrate to v2:', error);
-    throw error;
+          model_provider: message.model_provider || message.provider
+        };
+      });
+    });
+  }
+
+  if (database.getDatabaseVersion() < 3) {
+    await database.applyMigration(3, 'Added persistent sessions and schema metadata', (draft) => {
+      // Older files are normalized during load. Keeping this migration explicit
+      // ensures the normalized fields are persisted only after a backup exists.
+      draft.sessions = Array.isArray(draft.sessions) ? draft.sessions : [];
+      draft.migrations = Array.isArray(draft.migrations) ? draft.migrations : [];
+    });
+  }
+
+  if (database.getDatabaseVersion() > CURRENT_DATABASE_VERSION) {
+    throw new Error(
+      `Database version ${database.getDatabaseVersion()} is newer than supported version ${CURRENT_DATABASE_VERSION}`
+    );
   }
 }
 
-/**
- * 验证数据库完整性
- */
-export async function validateDatabase(): Promise<{
+export async function validateDatabase(database: JSONDatabase = jsonDatabase): Promise<{
   valid: boolean;
   errors: string[];
   warnings: string[];
 }> {
   const errors: string[] = [];
   const warnings: string[] = [];
-  
+
   try {
-    // 检查消息表
-    const messagesResult = jsonDatabase.from('messages').select();
-    const messages = messagesResult.data || [];
-    
+    const messages = database.from('messages').select().data || [];
+    const conversations = database.from('conversations').select().data || [];
+    const users = database.from('users').select().data || [];
+    const conversationIds = new Set(conversations.map((conversation) => conversation.id));
+    const userIds = new Set(users.map((user) => user.id));
+
     for (const message of messages) {
-      // 验证必需字段
-      if (!message.id || !message.conversation_id || !message.content) {
-        errors.push(`Message ${message.id} is missing required fields`);
+      if (!message.id || !message.conversation_id || typeof message.content !== 'string') {
+        errors.push(`Message ${message.id || '(unknown)'} is missing required fields`);
       }
-      
-      // 验证思维链字段的一致性
-      if (message.has_thinking === true) {
-        if (!message.thinking_content) {
-          warnings.push(`Message ${message.id} has has_thinking=true but no thinking_content`);
-        }
+      if (!conversationIds.has(message.conversation_id)) {
+        warnings.push(`Message ${message.id || '(unknown)'} references a missing conversation`);
       }
-      
-      // 验证JSON格式
+      if (message.has_thinking === true && !message.thinking_content) {
+        warnings.push(`Message ${message.id} has has_thinking=true but no thinking_content`);
+      }
       if (message.thinking_content) {
         try {
           JSON.parse(message.thinking_content);
@@ -176,83 +78,65 @@ export async function validateDatabase(): Promise<{
         }
       }
     }
-    
-    // 检查对话表
-    const conversationsResult = jsonDatabase.from('conversations').select();
-    const conversations = conversationsResult.data || [];
-    
+
     for (const conversation of conversations) {
       if (!conversation.id || !conversation.user_id) {
-        errors.push(`Conversation ${conversation.id} is missing required fields`);
+        errors.push(`Conversation ${conversation.id || '(unknown)'} is missing required fields`);
+      } else if (!userIds.has(conversation.user_id)) {
+        warnings.push(`Conversation ${conversation.id} references a missing user`);
       }
     }
-    
-    return {
-      valid: errors.length === 0,
-      errors,
-      warnings
-    };
+
+    return { valid: errors.length === 0, errors, warnings };
   } catch (error) {
     return {
       valid: false,
-      errors: [`Validation failed: ${error}`],
-      warnings: []
+      errors: [`Validation failed: ${error instanceof Error ? error.message : String(error)}`],
+      warnings
     };
   }
 }
 
 /**
- * 清理无效的思维链数据
+ * Manual repair helper retained for compatibility. It is never run at startup;
+ * health reporting remains read-only and anomalous data is not auto-deleted.
  */
-export async function cleanupInvalidThinkingData(): Promise<{
-  cleaned: number;
-  errors: string[];
-}> {
+export async function cleanupInvalidThinkingData(
+  database: JSONDatabase = jsonDatabase
+): Promise<{ cleaned: number; errors: string[] }> {
   const errors: string[] = [];
   let cleaned = 0;
-  
+
   try {
-    const messagesResult = jsonDatabase.from('messages').select();
-    const messages = messagesResult.data || [];
-    
+    const messages = database.from('messages').select().data || [];
     for (const message of messages) {
-      let needsUpdate = false;
-      const updates: any = {};
-      
-      // 清理无效的thinking_content
+      const updates: Record<string, unknown> = {};
       if (message.thinking_content) {
         try {
           JSON.parse(message.thinking_content);
         } catch {
-          console.warn(`[Cleanup] Invalid thinking_content in message ${message.id}`);
           updates.thinking_content = undefined;
           updates.has_thinking = false;
-          needsUpdate = true;
         }
       }
-      
-      // 修复不一致的has_thinking标志
       if (message.has_thinking === true && !message.thinking_content) {
         updates.has_thinking = false;
-        needsUpdate = true;
       }
-      
       if (message.has_thinking === false && message.thinking_content) {
         updates.has_thinking = true;
-        needsUpdate = true;
       }
-      
-      if (needsUpdate) {
-        await jsonDatabase.from('messages').update(updates).eq('id', message.id);
-        cleaned++;
+      if (Object.keys(updates).length > 0) {
+        const result = await database.from('messages').update(updates).eq('id', message.id);
+        if (result.error) {
+          errors.push(result.error.message);
+        } else {
+          cleaned++;
+        }
       }
     }
-    
-    return { cleaned, errors };
   } catch (error) {
-    return {
-      cleaned,
-      errors: [`Cleanup failed: ${error}`]
-    };
+    errors.push(`Cleanup failed: ${error instanceof Error ? error.message : String(error)}`);
   }
+
+  return { cleaned, errors };
 }

@@ -4,6 +4,31 @@
  */
 import { AIProvider, AIServiceConfig } from './types.js';
 import { jsonDatabase } from './json-database.js';
+import { getSafeErrorMessage } from './error-utils.js';
+
+export function normalizeOllamaBaseUrl(baseUrl?: string): string {
+  const value = (baseUrl || 'http://localhost:11434').trim();
+  return value.replace(/\/v1\/*$/i, '').replace(/\/+$/, '');
+}
+
+/** A saved record is usable only when it contains the provider's required local fields. */
+export function isProviderConfigUsable(provider: string, config: unknown): boolean {
+  if (!config || typeof config !== 'object') return false;
+  const record = config as Record<string, unknown>;
+  const baseProvider = provider === 'openai-responses' ? 'openai' : provider;
+  const baseUrl = typeof record.base_url === 'string' ? record.base_url.trim() : '';
+  if (!baseUrl) return false;
+  try {
+    const parsed = new URL(baseUrl);
+    if (!['http:', 'https:'].includes(parsed.protocol) || !parsed.hostname) return false;
+  } catch {
+    return false;
+  }
+  if (baseProvider === 'ollama') return true;
+
+  const apiKey = typeof record.api_key === 'string' ? record.api_key.trim() : '';
+  return Boolean(apiKey && apiKey !== 'undefined' && apiKey !== 'null');
+}
 
 /**
  * 配置验证结果
@@ -56,7 +81,7 @@ export class ConfigManager {
       const { data: userConfigs, error } = await jsonDatabase.getAIProvidersByUserId(userId);
 
       if (error) {
-        console.error(`[ConfigManager] 获取用户配置失败:`, error);
+        console.error(`[ConfigManager] 获取用户配置失败:`, getSafeErrorMessage(error));
         return {
           found: false,
           source: 'none',
@@ -66,14 +91,20 @@ export class ConfigManager {
 
       // 查找匹配的配置（使用基础提供商名称）
       const userConfig = userConfigs?.find(
-        (config: any) => config.provider_name === baseProvider && config.is_active
+        (config: any) => (
+          config.provider_name === baseProvider
+          && config.is_active !== false
+          && config.is_active !== 'false'
+        )
       );
 
-      if (userConfig) {
+      if (userConfig && isProviderConfigUsable(baseProvider, userConfig)) {
         console.log(`[ConfigManager] 找到用户配置: ${baseProvider}`);
         return {
           found: true,
-          config: userConfig,
+          config: baseProvider === 'ollama'
+            ? { ...userConfig, base_url: normalizeOllamaBaseUrl(userConfig.base_url) }
+            : userConfig,
           source: 'user'
         };
       }
@@ -106,11 +137,12 @@ export class ConfigManager {
         error: `未找到 ${baseProvider} 的配置，请在设置页面配置 API Key`
       };
     } catch (error: any) {
-      console.error(`[ConfigManager] 查找配置时发生错误:`, error);
+      const safeError = getSafeErrorMessage(error);
+      console.error(`[ConfigManager] 查找配置时发生错误:`, safeError);
       return {
         found: false,
         source: 'none',
-        error: `查找配置失败: ${error.message}`
+        error: `查找配置失败: ${safeError}`
       };
     }
   }
@@ -267,7 +299,9 @@ export class ConfigManager {
     const aiConfig: AIServiceConfig = {
       provider: provider,
       apiKey: config.api_key || '',
-      baseUrl: config.base_url || this.getDefaultConfig(baseProvider)?.base_url || '',
+      baseUrl: baseProvider === 'ollama'
+        ? normalizeOllamaBaseUrl(config.base_url || this.getDefaultConfig(baseProvider)?.base_url)
+        : config.base_url || this.getDefaultConfig(baseProvider)?.base_url || '',
       model: model || config.default_model || this.getDefaultConfig(baseProvider)?.default_model || '',
       temperature: parameters?.temperature ?? 0.7,
       maxTokens: parameters?.maxTokens,

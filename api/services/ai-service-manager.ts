@@ -18,6 +18,7 @@ import {
 } from './types.js';
 import { modelParameterService } from '../../src/lib/model-parameters/index.js';
 import type { ProviderLimits } from '../../src/lib/model-parameters/types.js';
+import { getSafeErrorMessage } from './error-utils.js';
 
 export class AIServiceManager {
   private adapters: Map<AIProvider, AIServiceAdapter> = new Map();
@@ -44,7 +45,10 @@ export class AIServiceManager {
       this.parameterServiceReady = true;
       console.log('[AIServiceManager] 模型参数服务初始化完成');
     } catch (error) {
-      console.warn('[AIServiceManager] 模型参数服务初始化失败，使用默认配置', error);
+      console.warn(
+        '[AIServiceManager] 模型参数服务初始化失败，使用默认配置:',
+        getSafeErrorMessage(error)
+      );
       this.parameterServiceReady = false;
     }
   }
@@ -133,12 +137,13 @@ export class AIServiceManager {
       const response = await adapter.chat(testMessages, config);
       
       const isValid = !!(response && response.content && response.content.trim().length > 0);
-      console.log(`[DEBUG] Model test result for ${config.model}:`, isValid, response?.content?.substring(0, 50));
+      // Never log provider response content from a connection test.
+      console.log(`[DEBUG] Model test result for ${config.model}:`, isValid);
       
       return isValid;
     } catch (error: any) {
       console.error(`[DEBUG] testSpecificModel failed for ${provider}:${config.model}:`, {
-        message: error.message,
+        message: getSafeErrorMessage(error),
         status: error.status || error.statusCode,
         code: error.code
       });
@@ -231,7 +236,10 @@ export class AIServiceManager {
       const targetModel = modelId || this.getDefaultConfig(provider).model || '';
       return await modelParameterService.getModelLimits(provider, targetModel);
     } catch (error) {
-      console.warn(`[AIServiceManager] 获取模型限制失败: ${provider}:${modelId}`, error);
+      console.warn(
+        `[AIServiceManager] 获取模型限制失败: ${provider}:${modelId}`,
+        getSafeErrorMessage(error)
+      );
       // 返回基础默认限制
       return {
         temperature: { min: 0, max: 2, default: 1, step: 0.1 },
@@ -253,7 +261,10 @@ export class AIServiceManager {
       const targetModel = modelId || this.getDefaultConfig(provider).model || '';
       return await modelParameterService.getModelCapabilities(provider, targetModel);
     } catch (error) {
-      console.warn(`[AIServiceManager] 获取模型能力失败: ${provider}:${modelId}`, error);
+      console.warn(
+        `[AIServiceManager] 获取模型能力失败: ${provider}:${modelId}`,
+        getSafeErrorMessage(error)
+      );
       return {};
     }
   }
@@ -344,7 +355,10 @@ export class AIServiceManager {
       }
       
     } catch (error) {
-      console.warn(`[AIServiceManager] 参数验证失败，使用基础验证: ${provider}`, error);
+      console.warn(
+        `[AIServiceManager] 参数验证失败，使用基础验证: ${provider}`,
+        getSafeErrorMessage(error)
+      );
       // Fallback到基础验证逻辑
       this.basicValidateConfig(provider, config, errors);
     }

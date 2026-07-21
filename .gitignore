@@ -95,6 +95,8 @@ debug-*.log
 .cursor/
 .copilot/
 .kiro/
+AGENTS.md
+CLAUDE.md
 
 # OS generated files
 .DS_Store

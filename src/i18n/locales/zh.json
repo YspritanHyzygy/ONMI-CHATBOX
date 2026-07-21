@@ -15,7 +15,8 @@
     "chinese": "中文",
     "english": "English",
     "default": "默认",
-    "setDefault": "设为默认"
+    "setDefault": "设为默认",
+    "retry": "重试"
   },
   "auth": {
     "login": "登录",
@@ -38,7 +39,7 @@
     "pleaseLogin": "请先登录"
   },
   "chat": {
-    "title": "AI 聊天助手",
+    "title": "ONMI Chatbox",
     "newChat": "新对话",
     "sendMessage": "发送消息",
     "placeholder": "输入您的消息...",
@@ -164,7 +165,6 @@
     "testModelHelp": "此模型仅用于测试连接，不影响默认模型设置。如果不选择，将使用默认模型进行测试。",
     "deepResearchModels": "Deep Research 模型",
     "featureNotSupported": "暂不支持此功能",
-    "featureComingSoon": "功能开发中，敬请期待",
     "selectDefaultModel": "选择默认模型",
     "availableModels": "可用模型：",
     "moreModels": "+{{count}} 更多",
@@ -182,22 +182,22 @@
     "noResponse": "无",
     "networkError": "网络错误",
     "defaultService": "默认服务",
-    "cacheManagementDesc": "管理应用缓存和本地存储数据",
+    "cacheManagementDesc": "管理当前浏览器中的缓存与界面偏好",
     "cacheWarningTitle": "注意",
-    "cacheWarningText": "清除缓存将删除本地存储的数据，请谨慎操作。如需完全清除所有数据，请先退出登录再在登录页面进行清理。",
+    "cacheWarningText": "这些操作只影响当前浏览器，不会删除服务器上的账号、会话、消息或 Provider 配置。",
     "normalClear": "普通清理缓存",
     "normalClearTooltipContent": "设置页面标签状态、临时缓存数据、调试和开发数据、过期时间戳数据",
-    "normalClearTooltipRetained": "对话历史、模型选择、AI参数、登录状态、语言设置",
-    "normalClearDesc": "清理临时数据和界面状态，不影响对话历史、模型选择等重要配置。",
+    "normalClearTooltipRetained": "服务器历史、会话摘要缓存、模型选择、AI参数、登录状态、语言设置",
+    "normalClearDesc": "清理临时浏览器状态，不改变服务器数据和已保存的模型偏好。",
     "normalClearButton": "清理垃圾缓存",
     "deepClear": "深度清除缓存",
-    "deepClearTooltipContent": "对话历史、模型选择、AI参数、主题设置、设置页面标签状态、所有临时和缓存数据",
+    "deepClearTooltipContent": "会话摘要缓存、模型选择、AI参数、主题、设置页标签和临时浏览器数据",
     "deepClearTooltipRetained": "登录状态、语言设置",
-    "deepClearTooltipWarning": "注意：几乎所有内容都需要重新配置",
-    "deepClearDesc": "清除对话历史、模型选择、AI参数等所有用户数据，保留登录状态和语言设置。",
+    "deepClearTooltipWarning": "服务器会话与 Provider 配置保持不变",
+    "deepClearDesc": "清除大部分浏览器偏好与缓存副本，不会删除服务器上的会话历史。",
     "deepClearButton": "深度清除缓存",
     "currentCacheStatus": "当前缓存状态",
-    "cacheConversationHistory": "对话历史",
+    "cacheConversationHistory": "会话摘要缓存",
     "cacheModelSelection": "模型选择",
     "cacheAiParameters": "AI参数",
     "cacheSettingsTab": "设置标签",
@@ -327,7 +327,7 @@
         "claudeUrl": "https://api.anthropic.com",
         "geminiUrl": "https://generativelanguage.googleapis.com",
         "xaiUrl": "https://api.x.ai/v1",
-        "ollamaUrl": "http://localhost:11434/v1"
+        "ollamaUrl": "http://localhost:11434"
       },
       "descriptions": {
         "openaiKey": "从OpenAI控制台获取您的API密钥",
@@ -339,6 +339,30 @@
         "responsesApi": "启用OpenAI新的Responses API，支持有状态对话和链式响应"
       }
     }
+  },
+  "history": {
+    "title": "对话历史",
+    "description": "管理并重新打开已保存的 AI 对话",
+    "backToChat": "返回聊天",
+    "searchPlaceholder": "搜索对话...",
+    "deleteSelected": "删除选中",
+    "confirmDelete": "删除选中的对话？",
+    "confirmDeleteDescription": "确定删除选中的 {{count}} 个对话吗？此操作不可撤销。",
+    "confirmDeleteSingle": "删除对话？",
+    "confirmDeleteSingleDescription": "此操作不可撤销。",
+    "deleteSuccess": "对话数据已删除",
+    "deleteFailed": "删除失败",
+    "loadFailed": "无法加载对话历史",
+    "noResults": "未找到匹配的对话",
+    "empty": "暂无对话历史",
+    "tryDifferent": "请尝试其他搜索词",
+    "startFirst": "开始你的第一次 AI 对话",
+    "startNow": "立即开始",
+    "noPreview": "暂无预览",
+    "messages": "条消息",
+    "selectConversation": "选择 {{title}}",
+    "openConversation": "打开 {{title}}",
+    "deleteConversation": "删除 {{title}}"
   },
   "modelSelector": {
     "fetchError": "无法获取模型列表，请检查后端服务是否正常运行。",

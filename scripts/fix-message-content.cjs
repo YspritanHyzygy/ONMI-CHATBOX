@@ -71,7 +71,7 @@ try {
           fixedContent = String(message.content);
         }
         
-        console.log(`   修复后: ${fixedContent.substring(0, 50)}${fixedContent.length > 50 ? '...' : ''}`);
+        console.log('   修复后: 内容已规范化（为避免泄露用户数据，不输出预览）');
         console.log('');
         
         fixedCount++;

@@ -21,5 +21,6 @@ export interface ProviderConfig {
   config: Record<string, string>;
   model: string;
   is_default: boolean;
+  is_active?: boolean;
   models?: (string | { id?: string; name?: string; [key: string]: unknown })[];
 }

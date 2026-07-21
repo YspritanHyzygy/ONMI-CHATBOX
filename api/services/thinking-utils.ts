@@ -4,6 +4,7 @@
  */
 
 import { ThinkingResponse, ReasoningEffort } from './types.js';
+import { getSafeErrorMessage } from './error-utils.js';
 
 /**
  * 验证推理努力程度是否有效
@@ -256,7 +257,7 @@ export function serializeThinking(thinking: ThinkingResponse): string {
   try {
     return JSON.stringify(thinking);
   } catch (error) {
-    console.error('Failed to serialize thinking:', error);
+    console.error('Failed to serialize thinking:', getSafeErrorMessage(error));
     return JSON.stringify({ content: thinking.content || '' });
   }
 }
@@ -269,7 +270,7 @@ export function deserializeThinking(json: string): ThinkingResponse | null {
     const parsed = JSON.parse(json);
     return normalizeThinkingResponse(parsed);
   } catch (error) {
-    console.error('Failed to deserialize thinking:', error);
+    console.error('Failed to deserialize thinking:', getSafeErrorMessage(error));
     return null;
   }
 }

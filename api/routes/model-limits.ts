@@ -1,117 +1,95 @@
 import express from 'express';
 import { StaticDataManager } from '../../src/lib/model-parameters/static-manager.js';
 import { DynamicDataManager } from '../../src/lib/model-parameters/dynamic-manager.js';
+import { getSafeErrorMessage } from '../services/error-utils.js';
 
 const router = express.Router();
 
-// 获取指定提供商和模型的参数限制
-router.get('/:provider/:model?', async (req, res) => {
-  try {
-    const { provider, model } = req.params;
-    
-    console.log(`[ModelLimits API] 获取参数限制: ${provider}${model ? `/${model}` : ''}`);
-    
-    let limits = null;
-    
-    // 首先尝试动态获取（仅对Gemini）
-    if (provider === 'gemini') {
-      try {
-        const dynamicManager = new DynamicDataManager();
-        await dynamicManager.initialize();
-        limits = await dynamicManager.getModelParameters(provider, model || 'gemini-1.5-pro');
-        console.log(`[ModelLimits API] 动态获取成功: ${provider}/${model}`);
-      } catch (error: any) {
-        console.warn(`[ModelLimits API] 动态获取失败，回退到静态: ${error.message}`);
-      }
-    }
-    
-    // 如果动态获取失败或不适用，使用静态数据
-    if (!limits) {
-      const staticManager = new StaticDataManager();
-      await staticManager.initialize();
-      limits = await staticManager.getModelParameters(provider, model || 'default');
-      console.log(`[ModelLimits API] 静态获取成功: ${provider}/${model}`);
-    }
-    
-    if (!limits) {
-      return res.status(404).json({
-        success: false,
-        error: `未找到模型参数限制: ${provider}${model ? `/${model}` : ''}`
-      });
-    }
-    
-    res.json(limits);
-    
-  } catch (error: any) {
-    console.error('[ModelLimits API] 获取参数限制失败:', error);
-    res.status(500).json({
-      success: false,
-      error: `获取模型参数限制失败: ${error.message}`
-    });
-  }
-});
+function routeParam(params: Record<string, string | string[]>, name: string): string | undefined {
+  const value = params[name];
+  return Array.isArray(value) ? value[0] : value;
+}
 
-// 获取所有可用的提供商列表
+// Static routes must be registered before the parameterized provider/model route.
 router.get('/providers', async (_req, res) => {
   try {
-    const staticManager = new StaticDataManager();
-    await staticManager.initialize();
-    const providers = await staticManager.getAllProviders();
-    
-    res.json({
-      success: true,
-      providers
-    });
-    
-  } catch (error: any) {
-    console.error('[ModelLimits API] 获取提供商列表失败:', error);
-    res.status(500).json({
-      success: false,
-      error: `获取提供商列表失败: ${error.message}`
-    });
+    const manager = new StaticDataManager();
+    await manager.initialize();
+    res.json({ success: true, providers: await manager.getAllProviders() });
+  } catch (error: unknown) {
+    const message = getSafeErrorMessage(error);
+    console.error('[ModelLimits] Failed to list providers', message);
+    res.status(500).json({ success: false, error: `Failed to list providers: ${message}` });
   }
 });
 
-// 获取指定提供商的所有模型
 router.get('/:provider/models', async (req, res) => {
   try {
-    const { provider } = req.params;
-    
+    const provider = routeParam(req.params as Record<string, string | string[]>, 'provider') || '';
     let models: string[] = [];
-    
-    // 首先尝试动态获取（仅对Gemini）
+
     if (provider === 'gemini') {
       try {
-        const dynamicManager = new DynamicDataManager();
-        await dynamicManager.initialize();
-        const modelEntries = await dynamicManager.getProviderModels(provider);
-        models = modelEntries.map(entry => entry.modelId);
-        console.log(`[ModelLimits API] 动态获取模型列表成功: ${provider}`);
-      } catch (error: any) {
-        console.warn(`[ModelLimits API] 动态获取模型列表失败，回退到静态: ${error.message}`);
+        const manager = new DynamicDataManager();
+        await manager.initialize();
+        models = (await manager.getProviderModels(provider)).map(entry => entry.modelId);
+      } catch (error: unknown) {
+        const message = getSafeErrorMessage(error);
+        console.warn('[ModelLimits] Dynamic Gemini model lookup failed; using static data', message);
       }
     }
-    
-    // 如果动态获取失败或不适用，使用静态数据
-    if (!models || models.length === 0) {
-      const staticManager = new StaticDataManager();
-      await staticManager.initialize();
-      const modelEntries = await staticManager.getProviderModels(provider);
-      models = modelEntries.map(entry => entry.modelId);
-      console.log(`[ModelLimits API] 静态获取模型列表成功: ${provider}`);
+
+    if (models.length === 0) {
+      const manager = new StaticDataManager();
+      await manager.initialize();
+      models = (await manager.getProviderModels(provider)).map(entry => entry.modelId);
     }
-    
-    res.json({
-      success: true,
-      models
-    });
-    
-  } catch (error: any) {
-    console.error('[ModelLimits API] 获取模型列表失败:', error);
-    res.status(500).json({
-      success: false,
-      error: `获取模型列表失败: ${error.message}`
-    });
+
+    res.json({ success: true, models });
+  } catch (error: unknown) {
+    const message = getSafeErrorMessage(error);
+    console.error('[ModelLimits] Failed to list models', message);
+    res.status(500).json({ success: false, error: `Failed to list models: ${message}` });
+  }
+});
+
+router.get('/:provider/:model?', async (req, res) => {
+  try {
+    const params = req.params as Record<string, string | string[]>;
+    const provider = routeParam(params, 'provider') || '';
+    const model = routeParam(params, 'model') || routeParam(params, 'model?');
+    let limits = null;
+
+    if (provider === 'gemini') {
+      try {
+        const manager = new DynamicDataManager();
+        await manager.initialize();
+        limits = await manager.getModelParameters(provider, model || 'gemini-1.5-pro');
+      } catch (error: unknown) {
+        const message = getSafeErrorMessage(error);
+        console.warn('[ModelLimits] Dynamic Gemini limits lookup failed; using static data', message);
+      }
+    }
+
+    if (!limits) {
+      const manager = new StaticDataManager();
+      await manager.initialize();
+      limits = await manager.getModelParameters(provider, model || 'default');
+    }
+
+    if (!limits) {
+      res.status(404).json({
+        success: false,
+        error: `No model limits found for ${provider}${model ? `/${model}` : ''}`
+      });
+      return;
+    }
+
+    res.json(limits);
+  } catch (error: unknown) {
+    const message = getSafeErrorMessage(error);
+    console.error('[ModelLimits] Failed to load model limits', message);
+    res.status(500).json({ success: false, error: `Failed to load model limits: ${message}` });
   }
 });
 

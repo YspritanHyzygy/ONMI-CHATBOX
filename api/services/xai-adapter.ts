@@ -11,6 +11,8 @@ import {
   AIServiceError 
 } from './types.js';
 
+type AbortableConfig = AIServiceConfig & { signal?: AbortSignal };
+
 export class XAIAdapter implements AIServiceAdapter {
   provider = 'xai' as const;
 
@@ -32,7 +34,7 @@ export class XAIAdapter implements AIServiceAdapter {
           role: msg.role,
           content: msg.content
         })),
-        temperature: config.temperature || 0.7,
+        temperature: config.temperature ?? 0.7,
         max_tokens: config.maxTokens || 2000
       };
 
@@ -50,7 +52,9 @@ export class XAIAdapter implements AIServiceAdapter {
         requestParams.stop = config.stop;
       }
 
-      const response = await client.chat.completions.create(requestParams);
+      const response = await client.chat.completions.create(requestParams, {
+        signal: (config as AbortableConfig).signal
+      });
 
       const choice = response.choices[0];
       if (!choice?.message?.content) {
@@ -87,7 +91,7 @@ export class XAIAdapter implements AIServiceAdapter {
           role: msg.role,
           content: msg.content
         })),
-        temperature: config.temperature || 0.7,
+        temperature: config.temperature ?? 0.7,
         max_tokens: config.maxTokens || 2000,
         stream: true
       };
@@ -106,7 +110,9 @@ export class XAIAdapter implements AIServiceAdapter {
         streamParams.stop = config.stop;
       }
 
-      const stream = await client.chat.completions.create(streamParams);
+      const stream = await client.chat.completions.create(streamParams, {
+        signal: (config as AbortableConfig).signal
+      });
 
       for await (const chunk of stream as any) {
         const choice = chunk.choices[0];

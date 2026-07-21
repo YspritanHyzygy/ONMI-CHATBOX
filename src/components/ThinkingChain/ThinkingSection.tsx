@@ -23,12 +23,13 @@ export const ThinkingSection: React.FC<ThinkingSectionProps> = ({
   className = ''
 }) => {
   const [isExpanded, setIsExpanded] = useState(defaultExpanded);
+  const hasContent = Boolean(content);
 
   useEffect(() => {
-    if (isStreaming && content) {
+    if (isStreaming && hasContent) {
       setIsExpanded(true);
     }
-  }, [isStreaming, !!content]);
+  }, [hasContent, isStreaming]);
 
   if (!content && !isStreaming) {
     return null;

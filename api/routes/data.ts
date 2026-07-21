@@ -4,8 +4,27 @@
 import { Router, Request, Response } from 'express';
 import { ensureDatabaseInitialized } from '../services/database-init.js';
 import { resolveAuthenticatedUserId } from '../middleware/auth.js';
+import { CURRENT_DATABASE_VERSION } from '../services/database-migration.js';
+import { sanitizeErrorMessage } from '../services/error-utils.js';
+import type { ImportPayload } from '../services/json-database.js';
 
 const router = Router();
+
+function logRouteError(label: string, error: unknown): void {
+  const message = error instanceof Error ? error.message : String(error);
+  console.error(label, sanitizeErrorMessage(message));
+}
+
+router.get('/health', async (_req: Request, res: Response): Promise<void> => {
+  try {
+    const db = await ensureDatabaseInitialized();
+    const report = await db.getHealthReport(CURRENT_DATABASE_VERSION);
+    res.json({ success: true, data: report });
+  } catch (error) {
+    logRouteError('Database health check failed:', error);
+    res.status(503).json({ success: false, error: '数据库健康检查失败' });
+  }
+});
 
 /**
  * 清除所有用户的动态获取模型数据
@@ -29,7 +48,7 @@ router.post('/clear-models', async (req: Request, res: Response): Promise<void> 
     const { data: userConfigs, error: getError } = await db.getAIProvidersByUserId(userId);
     
     if (getError) {
-      console.error('获取用户配置失败:', getError);
+      logRouteError('获取用户配置失败:', getError);
       res.status(500).json({
         success: false,
         error: '获取用户配置失败'
@@ -53,7 +72,7 @@ router.post('/clear-models', async (req: Request, res: Response): Promise<void> 
         });
         
         if (updateError) {
-          console.error(`清理${config.provider_name}模型数据失败:`, updateError);
+          logRouteError(`清理${config.provider_name}模型数据失败:`, updateError);
         } else {
           clearedCount++;
         }
@@ -69,7 +88,7 @@ router.post('/clear-models', async (req: Request, res: Response): Promise<void> 
     });
     
   } catch (error) {
-    console.error('清理模型数据错误:', error);
+    logRouteError('清理模型数据错误:', error);
     res.status(500).json({
       success: false,
       error: '清理模型数据失败'
@@ -95,54 +114,11 @@ router.get('/export/:userId', async (req: Request, res: Response): Promise<void>
 
     const db = await ensureDatabaseInitialized();
     
-    // 获取用户信息
-    const { data: user } = await db.findUserById(userId);
-    if (!user) {
-      res.status(404).json({
-        success: false,
-        error: '用户不存在'
-      });
-      return;
-    }
-
-    // 获取用户的所有数据
-    const { data: conversations } = await db.getConversationsByUserId(userId);
-    const { data: aiProviders } = await db.getAIProvidersByUserId(userId);
-    
-    // 获取所有相关的消息
-    const allMessages = [];
-    if (conversations) {
-      for (const conv of conversations) {
-        const { data: messages } = await db.getMessagesByConversationId(conv.id);
-        if (messages) {
-          allMessages.push(...messages);
-        }
-      }
-    }
-
-    // 构建导出数据
-    const exportData = {
-      version: '1.0',
-      exportDate: new Date().toISOString(),
-      user: {
-        id: user.id,
-        username: user.username,
-        displayName: user.displayName,
-        email: user.email,
-        created_at: user.created_at
-      },
-      conversations: conversations || [],
-      messages: allMessages,
-      aiProviders: aiProviders || [],
-      metadata: {
-        totalConversations: conversations?.length || 0,
-        totalMessages: allMessages.length,
-        totalAIProviders: aiProviders?.length || 0
-      }
-    };
+    const includeCredentials = req.query['includeCredentials'] === 'true';
+    const exportData = await db.exportUserData(userId, includeCredentials);
 
     // 设置下载头部
-    const filename = `gemini-chat-backup-${user.username}-${new Date().toISOString().split('T')[0]}.json`;
+    const filename = `onmi-chatbox-backup-${exportData.user.username}-${new Date().toISOString().split('T')[0]}.json`;
     res.setHeader('Content-Type', 'application/json');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     
@@ -151,7 +127,7 @@ router.get('/export/:userId', async (req: Request, res: Response): Promise<void>
       data: exportData
     });
   } catch (error) {
-    console.error('Export data error:', error);
+    logRouteError('Export data error:', error);
     res.status(500).json({
       success: false,
       error: '导出数据失败'
@@ -166,9 +142,16 @@ router.get('/export/:userId', async (req: Request, res: Response): Promise<void>
 router.post('/import/:userId', async (req: Request, res: Response): Promise<void> => {
   try {
     const scopedUser = resolveAuthenticatedUserId(req, req.params.userId);
-    const { data: importData, mergeMode = 'replace' } = req.body as {
-      data?: any;
+    const {
+      data: importData,
+      mergeMode = 'replace',
+      confirmReplace = false,
+      confirmCredentials = false
+    } = req.body as {
+      data?: ImportPayload;
       mergeMode?: 'replace' | 'merge';
+      confirmReplace?: boolean;
+      confirmCredentials?: boolean;
     };
 
     if (!scopedUser.ok) {
@@ -188,6 +171,15 @@ router.post('/import/:userId', async (req: Request, res: Response): Promise<void
       return;
     }
 
+    if (mergeMode === 'replace' && confirmReplace !== true) {
+      res.status(409).json({
+        success: false,
+        error: '覆盖导入需要明确确认',
+        code: 'REPLACE_CONFIRMATION_REQUIRED'
+      });
+      return;
+    }
+
     const db = await ensureDatabaseInitialized();
     
     // 验证用户存在
@@ -200,11 +192,22 @@ router.post('/import/:userId', async (req: Request, res: Response): Promise<void
       return;
     }
 
-    const importResult = await db.importUserData(userId, importData, mergeMode);
+    const importResult = await db.importUserData(userId, importData, mergeMode, {
+      allowCredentials: confirmCredentials === true
+    });
     if (importResult.error || !importResult.data) {
-      res.status(400).json({
+      const errorCode = importResult.error?.code;
+      const status = errorCode === 'CREDENTIAL_CONFIRMATION_REQUIRED'
+        ? 409
+        : errorCode === 'NOT_FOUND'
+          ? 404
+          : ['INVALID_IMPORT', 'INVALID_PARAM'].includes(errorCode || '')
+            ? 400
+            : 500;
+      res.status(status).json({
         success: false,
-        error: importResult.error?.message || '导入数据失败'
+        error: importResult.error?.message || '导入数据失败',
+        code: errorCode
       });
       return;
     }
@@ -215,7 +218,7 @@ router.post('/import/:userId', async (req: Request, res: Response): Promise<void
       stats: importResult.data
     });
   } catch (error) {
-    console.error('Import data error:', error);
+    logRouteError('Import data error:', error);
     res.status(500).json({
       success: false,
       error: '导入数据失败'
@@ -252,13 +255,21 @@ router.get('/preview/:userId', async (req: Request, res: Response): Promise<void
     }
 
     // 获取统计信息
-    const { data: conversations } = await db.getConversationsByUserId(userId);
-    const { data: aiProviders } = await db.getAIProvidersByUserId(userId);
+    const { data: conversations, error: conversationsError } = await db.getConversationsByUserId(userId);
+    const { data: aiProviders, error: providersError } = await db.getAIProvidersByUserId(userId);
+    if (conversationsError || providersError) {
+      res.status(500).json({ success: false, error: '获取预览信息失败' });
+      return;
+    }
     
     let totalMessages = 0;
     if (conversations) {
       for (const conv of conversations) {
-        const { data: messages } = await db.getMessagesByConversationId(conv.id);
+        const { data: messages, error: messagesError } = await db.getMessagesByConversationId(conv.id);
+        if (messagesError) {
+          res.status(500).json({ success: false, error: '获取预览信息失败' });
+          return;
+        }
         totalMessages += messages?.length || 0;
       }
     }
@@ -279,7 +290,7 @@ router.get('/preview/:userId', async (req: Request, res: Response): Promise<void
       }
     });
   } catch (error) {
-    console.error('Preview data error:', error);
+    logRouteError('Preview data error:', error);
     res.status(500).json({
       success: false,
       error: '获取预览信息失败'

@@ -1,254 +1,165 @@
-# 🤖 AI Chat Application
+# ONMI Chatbox
 
-![AI Coded 100%](https://img.shields.io/badge/AI%20Coded-100%25-brightgreen?style=plastic&labelColor=gray)
+ONMI Chatbox 是一个本地优先、自备密钥（BYOK）的多 Provider AI 聊天工作台，支持 OpenAI、Anthropic Claude、Google Gemini、xAI 和 Ollama。React/Vite 前端通过 Express API 工作，账号、会话、Provider 配置、对话与消息保存在本地 JSON 数据库中。
 
-一个现代化的多AI提供商聊天应用，基于React、TypeScript和Node.js构建。支持与OpenAI GPT、Google Gemini、Anthropic Claude等多种AI模型进行对话。
+[English](README.md)
 
-[English](README.md) | 简体中文
+> 项目状态：本地开发预览版。ONMI 面向一台可信设备，不是托管服务，也不是可直接上线的多租户产品。
 
-## ✨ 核心特性
+## 当前能力
 
-- 🔄 **多AI提供商支持**: 支持OpenAI、Google Gemini、Anthropic Claude、xAI Grok、Ollama
-- 👤 **用户认证系统**: 用户注册和登录功能，支持用户数据隔离和个性化设置
-- 🔐 **用户自定义API密钥**: 通过Web界面或环境变量配置个人API密钥
-- 💬 **对话管理**: 创建、保存和管理多个聊天对话，支持用户独立数据
-- ⚡ **实时聊天界面**: 现代化响应式聊天UI，支持消息历史
-- 📝 **Markdown渲染**: AI回复支持完整的Markdown格式显示
-- 💾 **本地数据存储**: 所有对话和消息存储在本地JSON文件中
-- 📤 **数据导出/导入**: 支持用户数据备份和迁移功能
-- 🚀 **零配置启动**: 无需注册外部服务，直接运行即可使用
-- 💼 **商业化扩展**: 预留订阅和付费功能接口，支持未来扩展
-- 🔒 **TypeScript**: 前后端完整的类型安全保障
+- 本地账号、按用户隔离的会话，以及服务重启后仍有效的登录 session。
+- 基于 Server-Sent Events（SSE）的流式聊天。
+- 通过设置页配置 Provider 和模型，也支持环境变量作为服务端兜底。
+- 会话历史、搜索、重命名、删除、分叉和 Markdown 对话导出。
+- 默认不包含 API 凭证的安全 JSON 备份。
+- 导入前预览；覆盖数据或恢复凭证时必须再次确认。
+- 只读数据健康报告，用于查看迁移和完整性问题。
+- 本地请求量与 token 估算；真实账单仍以 Provider 官方后台为准。
+- 英文与简体中文界面。
 
-## 技术栈
+## 环境要求
 
-### 前端
-- **React 18** with TypeScript
-- **Vite** for fast development and building
-- **Tailwind CSS** for styling
-- **React Router** for navigation
-- **Zustand** for state management
+- Node.js 20 或更新版本
+- npm
+- 远程 Provider API Key，或本机运行的 Ollama
 
-### 后端
-- **Node.js** with Express.js and TypeScript
-- **本地JSON数据库** 用于数据存储
-- **AI服务适配器** 支持多个AI提供商
-
-## 📋 环境要求
-
-- **Node.js 18+** 和 npm
-- **AI提供商API密钥** (可通过Web界面或环境变量配置)
-
-## 🚀 快速开始
-
-### 步骤1: 克隆项目并安装依赖
+## 快速开始
 
 ```bash
-# 克隆项目
-git clone https://github.com/YspritanHyzygy/ONMI-CHATBOX.git
-cd ONMI-CHATBOX
-
-# 安装依赖
-npm install
+npm ci
 ```
 
-### 步骤2: 配置AI服务 (可选)
-
-**方式一: 环境变量配置 (推荐)**
-
-编辑 `.env` 文件，添加您的AI API密钥：
-```env
-# AI提供商API密钥 (可选 - 也可通过Web界面配置)
-OPENAI_API_KEY=sk-your-openai-key
-GEMINI_API_KEY=your-gemini-key
-CLAUDE_API_KEY=your-claude-key
-XAI_API_KEY=your-grok-key
-
-# Ollama配置 (如果使用本地Ollama)
-OLLAMA_BASE_URL=http://localhost:11434/v1
-```
-
-**方式二: Web界面配置**
-可以在启动应用后通过设置页面配置。
-
-### 步骤3: 启动应用
+可以把 `.env.example` 复制为 `.env` 并填写服务端兜底密钥，也可以保持为空，登录后再从设置页配置。
 
 ```bash
-# 同时启动前后端 (推荐)
 npm run dev
 ```
 
-**或者分别启动:**
-```bash
-# 终端1: 启动后端服务 (端口3001)
-npm run server:dev
+打开 `http://localhost:5173`，注册本地账号，然后在 **设置** 中至少配置一个 Provider。
 
-# 终端2: 启动前端服务 (端口5173)
-npm run client:dev
+默认地址：
+
+- Web 前端：`http://localhost:5173`
+- API 与健康检查：`http://127.0.0.1:3001/api`
+
+服务端默认只监听 `127.0.0.1`。除非已经设置严格的 `CORS_ORIGINS` 并理解 Provider 密钥会以明文保存在本机，否则不要把 `HOST` 改成公开网络接口。
+
+## Provider 配置
+
+对于已登录用户，设置页配置优先于环境变量兜底。
+
+```env
+OPENAI_API_KEY=
+OPENAI_BASE_URL=https://api.openai.com/v1
+OPENAI_DEFAULT_MODEL=gpt-5
+
+CLAUDE_API_KEY=
+CLAUDE_BASE_URL=https://api.anthropic.com
+CLAUDE_DEFAULT_MODEL=claude-sonnet-4
+
+GEMINI_API_KEY=
+GEMINI_DEFAULT_MODEL=gemini-2.5-pro
+
+XAI_API_KEY=
+XAI_BASE_URL=https://api.x.ai/v1
+XAI_DEFAULT_MODEL=grok-4
+
+OLLAMA_BASE_URL=http://localhost:11434
+OLLAMA_DEFAULT_MODEL=llama-4-scout
 ```
 
-### 步骤4: 开始使用
+Ollama 应填写服务根地址，例如 `http://localhost:11434`，不要附加 `/v1`。ONMI 会兼容并规范化旧的 `/v1` 配置，聊天和模型列表统一使用 Ollama 原生接口。
 
-1. 🌐 访问 `http://localhost:5173`
-2. 👤 **注册/登录**: 创建新账户或使用现有用户名登录
-3. 💬 直接开始聊天，或先配置AI服务
-4. ⚙️ 点击设置按钮配置API密钥(可选)
-5. ✅ 点击"测试连接"验证配置
-6. 🎯 选择默认模型
-7. 🎉 开始聊天！
+仓库里存在适配器，不代表每个模型版本都一定兼容。正式使用前请在设置页执行连接或模型测试。
 
-### 步骤5: 数据管理 (可选)
+## 本地数据与安全
 
-- 📤 **导出数据**: 备份您的对话和设置
-- 📥 **导入数据**: 从备份文件恢复
-- 🔄 **切换用户**: 每个用户都有独立的数据
+默认数据库位置：
 
-### 步骤6: 生产环境部署
+```text
+data/database.json
+```
+
+可以通过 `GEMINI_VIDEO_WEBUI_DB_PATH` 指定其他位置。自动化测试始终使用隔离的临时数据库。
+
+需要明确了解的安全属性：
+
+- Provider API Key 当前以明文保存在本地数据库中，尚未实现系统钥匙串或主密码加密。
+- Session token 是随机不透明值；数据库只持久化 SHA-256 哈希和过期时间。
+- 从旧的内存 token 版本升级后需要重新登录一次。
+- 普通 v2 备份默认剔除 API Key，并且永远不会导出 session。
+- “包含凭证”会生成敏感的明文备份，必须显式选择并确认。
+- 覆盖导入必须额外确认破坏性操作。
+- 数据库迁移会先备份；完整性异常只报告，不会自动删除孤儿记录。
+
+请把数据库和包含凭证的备份视为密码文件，不要提交到 Git、通过邮件传播或上传到不可信服务。
+
+## 验证
 
 ```bash
-# 构建前端
+npm run verify
+npm run test:e2e
+```
+
+`verify` 会依次运行 TypeScript、ESLint、全部 Vitest 测试和生产前端构建。Playwright 冒烟测试会使用隔离数据库和本地模拟 Ollama 服务，不会调用真实 AI Provider。
+
+其他命令：
+
+```bash
+npm run test:run
+npm run test:coverage
+npm run check
+npm run lint
 npm run build
-
-# 启动生产服务器
-npm start
 ```
 
-## 🔧 配置验证
+测试覆盖关键数据库、认证、聊天上下文、Provider 与 UI 回归，但不能证明第三方 Provider 永远可用、所有远程模型行为完全一致，或 ONMI 适合暴露在恶意多租户环境中。
 
-### 检查服务状态
-启动应用后，检查终端输出是否包含：
-```
-Server ready on port 3001
-```
+## 架构
 
-### 检查前端服务
-前端启动成功会显示：
-```
-➜  Local:   http://localhost:5173/
-➜  Network: use --host to expose
+```text
+React/Vite 前端
+      │ 认证请求 + SSE
+      ▼
+Express API ── Provider 适配器 ── OpenAI / Claude / Gemini / xAI / Ollama
+      │
+      └── 本地 JSON 数据库（用户、session 哈希、配置、对话）
 ```
 
-## ❓ 常见问题
+主要目录：
 
-### Q: AI提供商测试连接失败
-**A**: 
-- 确认API密钥格式正确
-- 检查网络连接
-- 验证API密钥是否有效且有足够余额
-
-### Q: 端口被占用
-**A**: 
-```bash
-# 查看端口占用
-netstat -ano | findstr :3001
-netstat -ano | findstr :5173
-
-# 或修改端口配置
-# 前端: vite.config.ts 中修改 server.port
-# 后端: api/server.ts 中修改 PORT
+```text
+src/        React 页面、聊天 UI、状态、hooks 与 i18n
+api/        Express 路由、认证、迁移、数据库与 Provider 适配器
+e2e/        使用隔离数据库的 Playwright 冒烟测试
+data/       已忽略的本地运行数据
 ```
 
-### Q: 没有聊天记录显示？
-**A**: 这是正常现象，本地存储会在首次使用时自动创建演示数据。
+除 `/api/auth/*` 和 `/api/health` 外，所有路由都必须经过认证中间件。用户数据只能按当前认证用户访问，不能信任客户端传来的用户 ID。
 
-## 项目结构
+主要接口：
 
-```
-├── api/                    # 后端 Express.js API
-│   ├── routes/            # API 路由处理器
-│   ├── services/          # AI 服务适配器和管理器
-│   └── app.ts            # Express 应用配置
-├── src/                   # 前端 React 应用
-│   ├── components/       # 可复用 React 组件
-│   ├── pages/           # 页面组件
-│   ├── hooks/           # 自定义 React hooks
-│   └── lib/            # 工具函数
-├── data/                 # 本地数据存储文件夹
-│   └── database.json    # 聊天数据存储 (自动创建)
-└── public/              # 静态资源
-```
+- `POST /api/auth/register`、`POST /api/auth/login`、`GET /api/auth/me`、`POST /api/auth/logout`
+- `GET /api/chat/conversations`、`PATCH /api/chat/conversations/:id`、`DELETE /api/chat/conversations`
+- `GET /api/chat/conversations/:id/messages`、`POST /api/chat/conversations/:id/fork`、`POST /api/chat`
+- `GET /api/data/preview/:userId`、`GET /api/data/export/:userId`、`POST /api/data/import/:userId`
+- `GET /api/data/health`
+- `GET /api/business/usage/:userId`
 
-## API 端点
+## 部署边界
 
-### 用户认证端点
-- `POST /api/auth/register` - 用户注册
-- `POST /api/auth/login` - 用户登录
-- `GET /api/auth/user/:userId` - 获取用户信息
-- `GET /api/auth/check-username/:username` - 检查用户名是否可用
+- `npm run build` 只构建浏览器前端；仓库有意不再提供虚假的云端或 Serverless 部署配置。
+- JSON 数据库只适合单机，不能用于横向扩容或临时文件系统部署。
+- 若要把 API 暴露到本机之外，需要自行补齐反向代理、TLS、来源限制、限流、共享持久化和密钥管理。
 
-### 聊天端点
-- `GET /api/chat/conversations` - 获取用户对话
-- `POST /api/chat` - 发送消息并获取AI回复
-- `GET /api/chat/:conversationId/messages` - 获取对话消息
+## 维护说明
 
-### 提供商端点
-- `GET /api/providers` - 获取可用的AI提供商及其配置
-- `GET /api/providers/supported` - 获取支持的AI提供商列表
+- 后端使用 ESM；TypeScript 源码里的相对导入保留 `.js` 后缀以满足 Node 解析。
+- 聊天传输使用 SSE，不是 Socket.IO。
+- 路由层保持精简，共享逻辑放在 `api/services/`。
+- 在旧客户端仍可能依赖时，继续保留会话列表响应中的 `data` 与 `conversations` 双字段。
+- 不得记录 Provider 凭证、原始 session token 或完整的敏感请求对象。
+- `README.md` 与 `README.zh-CN.md` 的行为描述必须同步。
 
-### 数据管理端点
-- `GET /api/data/export/:userId` - 导出用户数据
-- `POST /api/data/import/:userId` - 导入用户数据
-- `GET /api/data/preview/:userId` - 获取导出数据预览
-
-### 商业化端点 (预留)
-- `GET /api/business/subscription/:userId` - 获取订阅信息
-- `GET /api/business/usage/:userId` - 获取API使用统计
-- `GET /api/business/plans` - 获取可用订阅计划
-
-## 🤖 支持的AI提供商
-
-| 提供商 | 最新模型 | 配置要求 | 获取方式 |
-|--------|----------|----------|----------|
-| **OpenAI** | GPT-4o, GPT-4o-mini, GPT-4-turbo, GPT-3.5-turbo | API Key | [获取API密钥](https://platform.openai.com/api-keys) |
-| **Google Gemini** | Gemini-2.5-Pro, Gemini-2.5-Flash, Gemini-2.0-Flash | API Key | [获取API密钥](https://aistudio.google.com/app/apikey) |
-| **Anthropic Claude** | Claude-3.5-Sonnet, Claude-3-Opus, Claude-3.5-Haiku | API Key | [获取API密钥](https://console.anthropic.com/) |
-| **xAI Grok** | Grok-4, Grok-3, Grok-2-1212, Grok-2-Vision | API Key | [获取API密钥](https://console.x.ai/) |
-| **Ollama** | 自定义模型 | 本地安装 | [下载Ollama](https://ollama.ai/) |
-
-### 💰 费用说明
-- **OpenAI**: 按使用量付费，GPT-4o约$0.005/1K tokens
-- **Google Gemini**: 有免费额度，超出后按使用量付费
-- **Anthropic Claude**: 按使用量付费，Claude-3.5-Sonnet约$0.003/1K tokens
-- **xAI Grok**: 按使用量付费
-- **Ollama**: 完全免费，本地运行
-
-### 🚀 推荐配置
-- **新手用户**: 建议从Google Gemini开始（有免费额度）
-- **高级用户**: OpenAI GPT-4o或Claude-3.5-Sonnet（性能最佳）
-- **本地部署**: Ollama + Llama3.3（完全离线，隐私保护）
-
-## 🏦 模型库 (Model Bank)
-
-本应用使用“模型库”系统在本地管理模型参数（上下文窗口、最大 token 数、模型能力等）。这确保了用户界面始终反映每个模型的准确能力。
-
-### 更新模型定义
-
-要使用提供商的最新模型更新本地模型数据库，请执行以下操作：
-
-1. **配置 API 密钥**：确保您的 `.env` 文件中包含有效的 API 密钥。
-2. **运行更新脚本**：
-
-```bash
-# 更新 OpenAI 模型（从 API 和 Azure 文档获取）
-node scripts/update-openai-data.cjs
-
-# 更新 Gemini 模型（从 Google API 获取）
-node scripts/update-gemini-data.cjs
-```
-
-这些脚本将：
-- 从各自的 API 获取最新的模型列表
-- 更新 `src/lib/model-parameters/data/` 中的 JSON 配置文件
-- 自动创建旧配置的备份
-
-## 贡献
-
-1. Fork 本仓库
-2. 创建功能分支
-3. 提交你的更改
-4. 如适用，添加测试
-5. 提交 Pull Request
-
-## 许可证
-
-本项目采用 MIT 许可证。
+项目目前尚未声明许可证。

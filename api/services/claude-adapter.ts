@@ -11,6 +11,9 @@ import {
   AIServiceError 
 } from './types.js';
 import { buildServiceUrl } from './url-utils.js';
+import { getSafeErrorMessage } from './error-utils.js';
+
+type AbortableConfig = AIServiceConfig & { signal?: AbortSignal };
 
 export class ClaudeAdapter implements AIServiceAdapter {
   provider = 'claude' as const;
@@ -41,7 +44,7 @@ export class ClaudeAdapter implements AIServiceAdapter {
         messages: convertedMessages,
         system: system || undefined,
         max_tokens: config.maxTokens || 2000,
-        temperature: config.temperature || 0.7
+        temperature: config.temperature ?? 0.7
       };
 
       // Claude 支持 top_p 参数
@@ -54,7 +57,9 @@ export class ClaudeAdapter implements AIServiceAdapter {
         requestParams.stop_sequences = Array.isArray(config.stop) ? config.stop : [config.stop];
       }
 
-      const response = await client.messages.create(requestParams);
+      const response = await client.messages.create(requestParams, {
+        signal: (config as AbortableConfig).signal
+      });
 
       const content = response.content[0];
       if (content.type !== 'text') {
@@ -91,7 +96,7 @@ export class ClaudeAdapter implements AIServiceAdapter {
         messages: convertedMessages,
         system: system || undefined,
         max_tokens: config.maxTokens || 2000,
-        temperature: config.temperature || 0.7,
+        temperature: config.temperature ?? 0.7,
         stream: true
       };
 
@@ -105,7 +110,9 @@ export class ClaudeAdapter implements AIServiceAdapter {
         streamParams.stop_sequences = Array.isArray(config.stop) ? config.stop : [config.stop];
       }
 
-      const stream = await client.messages.create(streamParams);
+      const stream = await client.messages.create(streamParams, {
+        signal: (config as AbortableConfig).signal
+      });
 
       for await (const chunk of stream as any) {
         if (chunk.type === 'content_block_delta' && chunk.delta.type === 'text_delta') {
@@ -202,7 +209,7 @@ export class ClaudeAdapter implements AIServiceAdapter {
         500
       );
     } catch (error: any) {
-      console.error('Failed to get Claude models:', error);
+      console.error('Failed to get Claude models:', getSafeErrorMessage(error));
       // API调用失败时抛出错误，不返回默认模型
       throw new AIServiceError(
         error.message || 'Claude API调用失败，无法获取模型列表',

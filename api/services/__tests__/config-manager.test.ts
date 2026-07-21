@@ -5,7 +5,26 @@
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
-import { ConfigManager } from '../config-manager.js';
+import { ConfigManager, isProviderConfigUsable } from '../config-manager.js';
+
+describe('isProviderConfigUsable', () => {
+  it('rejects incomplete remote records and accepts a complete one', () => {
+    expect(isProviderConfigUsable('openai', {
+      api_key: '',
+      base_url: 'https://api.openai.com/v1'
+    })).toBe(false);
+    expect(isProviderConfigUsable('openai', {
+      api_key: 'sk-local',
+      base_url: 'https://api.openai.com/v1'
+    })).toBe(true);
+  });
+
+  it('requires only a root address for Ollama', () => {
+    expect(isProviderConfigUsable('ollama', { base_url: '' })).toBe(false);
+    expect(isProviderConfigUsable('ollama', { base_url: 'not-a-url' })).toBe(false);
+    expect(isProviderConfigUsable('ollama', { base_url: 'http://localhost:11434' })).toBe(true);
+  });
+});
 
 describe('ConfigManager', () => {
   let configManager: ConfigManager;

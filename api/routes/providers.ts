@@ -7,6 +7,9 @@ import { aiServiceManager } from '../services/ai-service-manager.js';
 import { AIProvider } from '../services/types.js';
 import { ensureDatabaseInitialized } from '../services/database-init.js';
 import { resolveAuthenticatedUserId } from '../middleware/auth.js';
+import { sanitizeProviderExtraConfig } from '../services/provider-config-safety.js';
+import { getSafeErrorMessage, sanitizeErrorMessage } from '../services/error-utils.js';
+import { isProviderConfigUsable } from '../services/config-manager.js';
 
 const router = Router();
 
@@ -28,7 +31,7 @@ const SUPPORTED_PROVIDERS = [
     name: 'gemini',
     displayName: 'Google Gemini',
     defaultModels: ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash', 'gemini-2.0-flash-lite'],
-    defaultBaseUrl: 'https://generativelanguage.googleapis.com/v1'
+    defaultBaseUrl: 'https://generativelanguage.googleapis.com'
   },
   {
     name: 'xai',
@@ -40,9 +43,47 @@ const SUPPORTED_PROVIDERS = [
     name: 'ollama',
     displayName: 'Ollama',
     defaultModels: [], // Ollama模型需要动态获取，不设置默认模型
-    defaultBaseUrl: 'http://localhost:11434/v1'
+    defaultBaseUrl: 'http://localhost:11434'
   }
 ];
+
+function getEnvironmentProviderSummary(providerName: string): {
+  configured: boolean;
+  defaultModel: string;
+} {
+  switch (providerName) {
+    case 'openai':
+      return {
+        configured: Boolean(process.env.OPENAI_API_KEY?.trim()),
+        defaultModel: process.env.OPENAI_DEFAULT_MODEL?.trim() || 'gpt-4o'
+      };
+    case 'claude':
+      return {
+        configured: Boolean(process.env.CLAUDE_API_KEY?.trim()),
+        defaultModel: process.env.CLAUDE_DEFAULT_MODEL?.trim() || 'claude-3-5-sonnet-20241022'
+      };
+    case 'gemini':
+      return {
+        configured: Boolean(process.env.GEMINI_API_KEY?.trim()),
+        defaultModel: process.env.GEMINI_DEFAULT_MODEL?.trim() || 'gemini-2.0-flash-exp'
+      };
+    case 'xai':
+      return {
+        configured: Boolean(process.env.XAI_API_KEY?.trim()),
+        defaultModel: process.env.XAI_DEFAULT_MODEL?.trim() || 'grok-2-1212'
+      };
+    case 'ollama':
+      return {
+        // Treat Ollama as an environment fallback only when the operator set
+        // its address explicitly. The built-in localhost default alone should
+        // not make an unavailable service look configured in the UI.
+        configured: Boolean(process.env.OLLAMA_BASE_URL?.trim()),
+        defaultModel: process.env.OLLAMA_DEFAULT_MODEL?.trim() || 'llama3.3'
+      };
+    default:
+      return { configured: false, defaultModel: '' };
+  }
+}
 
 /**
  * 获取用户配置的AI服务提供商及其模型列表
@@ -65,27 +106,23 @@ router.get('/', async (req: Request, res: Response): Promise<void> => {
     const { data: userConfigs, error } = await db.getAIProvidersByUserId(userId);
 
     if (error) {
-      console.error('获取用户配置失败:', error);
-      // 如果获取失败，返回空列表而不是硬编码模型
-      res.json({
-        success: true,
-        data: []
-      });
-      return;
-    }
-
-    // 如果用户没有配置任何提供商，返回空列表
-    if (!userConfigs || userConfigs.length === 0) {
-      res.json({
-        success: true,
-        data: []
+      console.error('获取用户配置失败:', getSafeErrorMessage(error));
+      res.status(500).json({
+        success: false,
+        error: '获取提供商配置失败'
       });
       return;
     }
 
     // 去重用户配置：每个提供商只保留一个配置，优先选择有动态模型的或最新的配置
     const uniqueConfigs = new Map<string, any>();
-    userConfigs.forEach((config: any) => {
+    (userConfigs || [])
+      .filter((config: any) => (
+        config.is_active !== false
+        && config.is_active !== 'false'
+        && isProviderConfigUsable(config.provider_name, config)
+      ))
+      .forEach((config: any) => {
       const existing = uniqueConfigs.get(config.provider_name);
       if (!existing) {
         uniqueConfigs.set(config.provider_name, config);
@@ -152,6 +189,13 @@ router.get('/', async (req: Request, res: Response): Promise<void> => {
           }).map((model: any) => {
             return model.id || model.name || model;
           });
+        } else {
+          // Older/local configurations store model IDs as strings. They are
+          // still authoritative (especially for Ollama) and must not be
+          // replaced with an unrelated static fallback.
+          modelsList = config.available_models.filter((model: unknown): model is string => (
+            typeof model === 'string' && Boolean(model.trim())
+          ));
         }
       }
       
@@ -165,22 +209,43 @@ router.get('/', async (req: Request, res: Response): Promise<void> => {
         id: config.provider_name,
         name: defaultProvider?.displayName || config.provider_name,
         models: modelsList,
+        source: 'user',
         config: {
           model: config.default_model || (modelsList.length > 0 ? modelsList[0] : '')
         }
       };
-    });
+      });
+
+    // Environment fallbacks must be usable without exposing their API keys to
+    // the browser. A user-scoped configuration always takes precedence.
+    const configuredNames = new Set(configuredProviders.map((provider) => provider.provider_name));
+    for (const provider of SUPPORTED_PROVIDERS) {
+      if (configuredNames.has(provider.name)) continue;
+      const environment = getEnvironmentProviderSummary(provider.name);
+      if (!environment.configured) continue;
+      const models = [...provider.defaultModels];
+      if (environment.defaultModel && !models.includes(environment.defaultModel)) {
+        models.unshift(environment.defaultModel);
+      }
+      configuredProviders.push({
+        provider_name: provider.name,
+        id: provider.name,
+        name: provider.displayName,
+        models,
+        source: 'environment',
+        config: { model: environment.defaultModel }
+      });
+    }
 
     res.json({
       success: true,
       data: configuredProviders
     });
   } catch (error) {
-    console.error('获取提供商列表错误:', error);
-    // 发生错误时返回空列表，不返回硬编码模型
-    res.json({
-      success: true,
-      data: []
+    console.error('获取提供商列表错误:', getSafeErrorMessage(error));
+    res.status(500).json({
+      success: false,
+      error: '获取提供商列表失败'
     });
   }
 });
@@ -243,7 +308,7 @@ router.get('/supported', async (_req: Request, res: Response): Promise<void> => 
       data: providers
     });
   } catch (error) {
-    console.error('获取支持的提供商列表错误:', error);
+    console.error('获取支持的提供商列表错误:', getSafeErrorMessage(error));
     res.status(500).json({ 
       success: false,
       error: '获取支持的提供商列表失败' 
@@ -400,6 +465,8 @@ router.post('/config', async (req: Request, res: Response): Promise<void> => {
       finalModels = currentConfig?.available_models || []; // 不再fallback到默认模型
     }
     
+    const safeExtraConfig = sanitizeProviderExtraConfig(extraConfig);
+
     const configData = {
       user_id: userId,
       provider_name: providerName,
@@ -408,8 +475,9 @@ router.post('/config', async (req: Request, res: Response): Promise<void> => {
       available_models: finalModels,
       default_model: defaultModel || (finalModels.length > 0 ? (typeof finalModels[0] === 'string' ? finalModels[0] : finalModels[0].id || finalModels[0].name || '') : ''),
       is_active: true,
-      // 合并额外的配置字段（如use_responses_api等）
-      ...extraConfig
+      // Only allow explicitly supported optional fields. Ownership, provider,
+      // credentials and model fields above cannot be replaced by client input.
+      ...safeExtraConfig
     };
     
     // 使用新的更新方法
@@ -459,7 +527,7 @@ router.post('/reset', async (req: Request, res: Response): Promise<void> => {
     const { data: userConfigs, error: getError } = await db.getAIProvidersByUserId(userId);
     
     if (getError) {
-      console.error('获取用户配置失败:', getError);
+      console.error('获取用户配置失败:', getSafeErrorMessage(getError));
       res.status(500).json({
         success: false,
         error: '获取用户配置失败'
@@ -484,7 +552,7 @@ router.post('/reset', async (req: Request, res: Response): Promise<void> => {
         });
         
         if (updateError) {
-          console.error(`重置${config.provider_name}配置失败:`, updateError);
+          console.error(`重置${config.provider_name}配置失败:`, getSafeErrorMessage(updateError));
         } else {
           resetCount++;
         }
@@ -500,7 +568,7 @@ router.post('/reset', async (req: Request, res: Response): Promise<void> => {
     });
     
   } catch (error) {
-    console.error('重置模型配置错误:', error);
+    console.error('重置模型配置错误:', getSafeErrorMessage(error));
     res.status(500).json({
       success: false,
       error: '重置模型配置失败'
@@ -590,8 +658,8 @@ router.post('/test', async (req: Request, res: Response): Promise<void> => {
     // 测试连接
     console.log(`[DEBUG] Testing connection for ${providerName} with config:`, {
       provider: providerName,
-      apiKey: apiKey ? `${apiKey.substring(0, 10)}...` : 'undefined',
-      baseUrl: baseUrl || 'default',
+      credentialsConfigured: Boolean(cleanApiKey),
+      customEndpoint: Boolean(baseUrl),
       model: model
     });
     
@@ -619,14 +687,15 @@ router.post('/test', async (req: Request, res: Response): Promise<void> => {
       models = await aiServiceManager.getAvailableModels(providerName as AIProvider, {
         provider: providerName as AIProvider,
         model: model || 'default',
-        apiKey,
+        apiKey: cleanApiKey,
         baseUrl
       });
     } catch (modelError) {
-      console.error(`[DEBUG] Failed to get models for ${providerName}:`, modelError);
+      const safeModelError = sanitizeErrorMessage(modelError instanceof Error ? modelError.message : '未知错误');
+      console.error(`[DEBUG] Failed to get models for ${providerName}:`, safeModelError);
       res.json({
         success: false,
-        error: `连接成功但无法获取模型列表: ${modelError instanceof Error ? modelError.message : '未知错误'}`
+        error: `连接成功但无法获取模型列表: ${safeModelError}`
       });
       return;
     }
@@ -650,10 +719,11 @@ router.post('/test', async (req: Request, res: Response): Promise<void> => {
           return;
         }
       } catch (testError) {
-        console.error(`[DEBUG] Model test failed for ${model}:`, testError);
+        const safeTestError = sanitizeErrorMessage(testError instanceof Error ? testError.message : '未知错误');
+        console.error(`[DEBUG] Model test failed for ${model}:`, safeTestError);
         res.json({
           success: false,
-          error: `模型 "${model}" 测试失败: ${testError instanceof Error ? testError.message : '未知错误'}\n\n可用模型列表:\n${models.map(m => `• ${m.id}${m.name !== m.id ? ` (${m.name})` : ''}`).join('\n')}`
+          error: `模型 "${model}" 测试失败: ${safeTestError}\n\n可用模型列表:\n${models.map(m => `• ${m.id}${m.name !== m.id ? ` (${m.name})` : ''}`).join('\n')}`
         });
         return;
       }
@@ -677,10 +747,11 @@ router.post('/test', async (req: Request, res: Response): Promise<void> => {
       }
     });
   } catch (error: any) {
-    console.error('测试连接错误:', error);
+    const safeError = sanitizeErrorMessage(error instanceof Error ? error.message : '未知错误');
+    console.error('测试连接错误:', safeError);
     res.status(500).json({
       success: false,
-      error: `连接测试失败: ${error.message}`
+      error: `连接测试失败: ${safeError}`
     });
   }
 });
@@ -795,7 +866,10 @@ router.post('/models', async (req: Request, res: Response): Promise<void> => {
             console.log('[INFO] 未找到 Research 模型，可能需要特殊权限或账户升级');
           }
         } catch (researchError: any) {
-          console.log('[INFO] 获取 Research 模型失败（这是正常的，可能需要特殊权限）:', researchError.message);
+          console.log(
+            '[INFO] 获取 Research 模型失败（这是正常的，可能需要特殊权限）:',
+            getSafeErrorMessage(researchError)
+          );
         }
       }
       
@@ -807,22 +881,23 @@ router.post('/models', async (req: Request, res: Response): Promise<void> => {
         }
       });
     } catch (error: any) {
-      console.error(`获取${providerName}模型列表错误:`, error);
+      const safeError = getSafeErrorMessage(error);
+      console.error(`获取${providerName}模型列表错误:`, safeError);
       
       // 根据错误类型返回不同的错误信息
       let errorMessage = '获取模型列表失败';
       
-      if (error.message) {
-        if (error.message.includes('401') || error.message.includes('Unauthorized')) {
+      if (safeError) {
+        if (safeError.includes('401') || safeError.includes('Unauthorized')) {
           errorMessage = 'API Key无效，请检查密钥是否正确';
-        } else if (error.message.includes('403') || error.message.includes('Forbidden')) {
+        } else if (safeError.includes('403') || safeError.includes('Forbidden')) {
           errorMessage = 'API Key权限不足或已过期';
-        } else if (error.message.includes('429') || error.message.includes('rate limit')) {
+        } else if (safeError.includes('429') || safeError.includes('rate limit')) {
           errorMessage = 'API调用频率超限，请稍后重试';
-        } else if (error.message.includes('timeout') || error.message.includes('ECONNREFUSED')) {
+        } else if (safeError.includes('timeout') || safeError.includes('ECONNREFUSED')) {
           errorMessage = '连接超时，请检查网络或服务地址';
         } else {
-          errorMessage = `获取模型列表失败: ${error.message}`;
+          errorMessage = `获取模型列表失败: ${safeError}`;
         }
       }
       
@@ -837,14 +912,15 @@ router.post('/models', async (req: Request, res: Response): Promise<void> => {
       });
     }
   } catch (error: any) {
-    console.error('获取模型列表外层错误:', error);
+    const safeError = getSafeErrorMessage(error);
+    console.error('获取模型列表外层错误:', safeError);
     
     // 检查是否是AIServiceError
     if (error.name === 'AIServiceError') {
       // 直接使用AIServiceError的错误信息
       res.json({
         success: false,
-        error: error.message || '获取模型列表失败',
+        error: safeError || '获取模型列表失败',
         data: {
           provider: req.body?.providerName || 'unknown',
           models: []
@@ -854,7 +930,7 @@ router.post('/models', async (req: Request, res: Response): Promise<void> => {
       // 其他类型的错误
       res.status(500).json({
         success: false,
-        error: `服务器内部错误: ${error.message}`,
+        error: `服务器内部错误: ${safeError}`,
         data: {
           provider: req.body?.providerName || 'unknown',
           models: []
@@ -927,7 +1003,7 @@ router.delete('/config', async (req: Request, res: Response): Promise<void> => {
       message: `已删除 ${deletedCount} 个 ${providerName} 配置`
     });
   } catch (error) {
-    console.error('删除配置错误:', error);
+    console.error('删除配置错误:', getSafeErrorMessage(error));
     res.status(500).json({
       success: false,
       error: '服务器内部错误'
@@ -1054,10 +1130,11 @@ router.post('/reset-models', async (req: Request, res: Response): Promise<void> 
     });
     
   } catch (error: any) {
-    console.error('重置模型错误:', error);
+    const safeError = getSafeErrorMessage(error);
+    console.error('重置模型错误:', safeError);
     res.status(500).json({
       success: false,
-      error: `服务器内部错误: ${error.message}`
+      error: `服务器内部错误: ${safeError}`
     });
   }
 });

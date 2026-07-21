@@ -5,6 +5,8 @@
 import { Router, Request, Response } from 'express';
 import { ensureDatabaseInitialized } from '../services/database-init.js';
 import { resolveAuthenticatedUserId } from '../middleware/auth.js';
+import { calculateLocalUsageStats, type UsageMessage } from '../services/usage-stats.js';
+import { getSafeErrorMessage } from '../services/error-utils.js';
 
 const router = Router();
 
@@ -41,6 +43,15 @@ const BUSINESS_CONFIG = {
       features: ['all']
     }
   }
+};
+
+// BYOK usage reporting is observational only; this app does not enforce a
+// local request quota when the optional business system is disabled.
+const LOCAL_BYOK_LIMITS = {
+  dailyRequests: -1,
+  monthlyRequests: -1,
+  maxTokensPerRequest: -1,
+  concurrentRequests: -1
 };
 
 
@@ -98,7 +109,7 @@ router.get('/subscription/:userId', async (req: Request, res: Response): Promise
       }
     });
   } catch (error) {
-    console.error('Get subscription error:', error);
+    console.error('Get subscription error:', getSafeErrorMessage(error));
     res.status(500).json({
       success: false,
       error: '获取订阅信息失败'
@@ -135,32 +146,37 @@ router.get('/usage/:userId', async (req: Request, res: Response): Promise<void> 
       return;
     }
 
-    // TODO: 实现实际的使用统计查询
-    // 当前返回模拟数据
-    
-    const mockUsage = {
-      current: {
-        daily: 15,
-        monthly: 234,
-        tokens: 12500
-      },
-      limits: BUSINESS_CONFIG.plans.free.apiLimits,
-      remaining: {
-        daily: BUSINESS_CONFIG.plans.free.apiLimits.dailyRequests - 15,
-        monthly: BUSINESS_CONFIG.plans.free.apiLimits.monthlyRequests - 234
-      },
-      resetDate: {
-        daily: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
-        monthly: new Date(new Date().getFullYear(), new Date().getMonth() + 1, 1).toISOString()
+    const { data: conversations, error: conversationsError } = await db.getConversationsByUserId(userId);
+    if (conversationsError) {
+      res.status(500).json({
+        success: false,
+        error: 'Failed to load usage conversations'
+      });
+      return;
+    }
+
+    const messages: UsageMessage[] = [];
+    for (const conversation of conversations || []) {
+      const { data: conversationMessages } = await db.getMessagesByConversationId(conversation.id);
+      if (Array.isArray(conversationMessages)) {
+        messages.push(...conversationMessages);
       }
-    };
+    }
+
+    const usage = calculateLocalUsageStats(
+      conversations || [],
+      messages,
+      BUSINESS_CONFIG.enabled
+        ? BUSINESS_CONFIG.plans[BUSINESS_CONFIG.defaultPlan].apiLimits
+        : LOCAL_BYOK_LIMITS
+    );
 
     res.json({
       success: true,
-      data: mockUsage
+      data: usage
     });
   } catch (error) {
-    console.error('Get usage error:', error);
+    console.error('Get usage error:', getSafeErrorMessage(error));
     res.status(500).json({
       success: false,
       error: '获取使用统计失败'
@@ -225,7 +241,7 @@ router.get('/plans', async (_req: Request, res: Response): Promise<void> => {
       data: plans
     });
   } catch (error) {
-    console.error('Get plans error:', error);
+    console.error('Get plans error:', getSafeErrorMessage(error));
     res.status(500).json({
       success: false,
       error: '获取订阅计划失败'
@@ -273,7 +289,7 @@ router.post('/subscribe', async (req: Request, res: Response): Promise<void> => 
       }
     });
   } catch (error) {
-    console.error('Subscribe error:', error);
+    console.error('Subscribe error:', getSafeErrorMessage(error));
     res.status(500).json({
       success: false,
       error: '创建订阅失败'
@@ -315,7 +331,7 @@ router.post('/api-keys', async (req: Request, res: Response): Promise<void> => {
       data: null
     });
   } catch (error) {
-    console.error('Generate API key error:', error);
+    console.error('Generate API key error:', getSafeErrorMessage(error));
     res.status(500).json({
       success: false,
       error: '生成API密钥失败'

@@ -1,254 +1,165 @@
-# 🤖 AI Chat Application
+# ONMI Chatbox
 
-![AI Coded 100%](https://img.shields.io/badge/AI%20Coded-100%25-brightgreen?style=plastic&labelColor=gray)
+ONMI Chatbox is a local-first, bring-your-own-key AI chat workspace for OpenAI, Anthropic Claude, Google Gemini, xAI, and Ollama. A React/Vite client talks to an Express API, while accounts, sessions, provider settings, conversations, and messages stay in a local JSON database.
 
-A modern multi-AI provider chat application built with React, TypeScript, and Node.js. Support conversations with multiple AI models including OpenAI GPT, Google Gemini, Anthropic Claude, and more.
+[简体中文](README.zh-CN.md)
 
-English | [简体中文](README.zh-CN.md)
+> Project status: local development preview. ONMI is designed for one trusted machine. It is not a hosted service or a production-ready multi-user deployment.
 
-## ✨ Key Features
+## Current capabilities
 
-- 🔄 **Multiple AI Provider Support**: OpenAI, Google Gemini, Anthropic Claude, xAI Grok, Ollama
-- 👤 **User Authentication System**: User registration and login with data isolation and personalized settings
-- 🔐 **User-Configurable API Keys**: Configure personal API keys through web interface or environment variables
-- 💬 **Conversation Management**: Create, save, and manage multiple chat conversations with independent user data
-- ⚡ **Real-time Chat Interface**: Modern responsive chat UI with message history
-- 📝 **Markdown Rendering**: Full Markdown format support for AI responses
-- 💾 **Local Data Storage**: All conversations and messages stored in local JSON files
-- 📤 **Data Export/Import**: Support user data backup and migration functionality
-- 🚀 **Zero Configuration**: No external service registration required, ready to use
-- 💼 **Business-Ready**: Reserved subscription and payment interfaces for future expansion
-- 🔒 **TypeScript**: Complete type safety for both frontend and backend
+- Local accounts with user-scoped conversations and restart-safe sessions.
+- Streaming chat over server-sent events (SSE).
+- Provider and model configuration from the UI, with environment-variable fallbacks.
+- Conversation history, search, rename, delete, fork, and Markdown transcript export.
+- Safe JSON backups that exclude API credentials by default.
+- Import preview and confirmation for destructive or credential-bearing restores.
+- Read-only database health reporting for migration and integrity issues.
+- Local request/token estimates. Provider dashboards remain the billing source of truth.
+- English and Simplified Chinese UI.
 
-## Tech Stack
+## Requirements
 
-### Frontend
-- **React 18** with TypeScript
-- **Vite** for fast development and building
-- **Tailwind CSS** for styling
-- **React Router** for navigation
-- **Zustand** for state management
+- Node.js 20 or newer
+- npm
+- An API key for each remote provider you use, or a local Ollama instance
 
-### Backend
-- **Node.js** with Express.js and TypeScript
-- **Local JSON Database** for data storage
-- **AI Service Adapters** for multiple AI providers
-
-## 📋 Prerequisites
-
-- **Node.js 18+** and npm
-- **AI Provider API Keys** (can be configured through web interface or environment variables)
-
-## 🚀 Quick Start
-
-### Step 1: Clone and Install Dependencies
+## Quick start
 
 ```bash
-# Clone the repository
-git clone https://github.com/YspritanHyzygy/ONMI-CHATBOX.git
-cd ONMI-CHATBOX
-
-# Install dependencies
-npm install
+npm ci
 ```
 
-### Step 2: Configure AI Services (Optional)
-
-**Option 1: Environment Variables (Recommended)**
-
-Edit the `.env` file and add your AI API keys:
-```env
-# AI Provider API Keys (Optional - can also be configured via web interface)
-OPENAI_API_KEY=sk-your-openai-key
-GEMINI_API_KEY=your-gemini-key
-CLAUDE_API_KEY=your-claude-key
-XAI_API_KEY=your-grok-key
-
-# Ollama Configuration (if using local Ollama)
-OLLAMA_BASE_URL=http://localhost:11434/v1
-```
-
-**Option 2: Web Interface Configuration**
-Configure through the settings page after starting the application.
-
-### Step 3: Start the Application
+Optionally copy `.env.example` to `.env` and add server-side fallback keys. You can also leave the keys empty and configure providers after signing in.
 
 ```bash
-# Start both frontend and backend (recommended)
 npm run dev
 ```
 
-**Or start separately:**
-```bash
-# Terminal 1: Start backend service (port 3001)
-npm run server:dev
+Open `http://localhost:5173`, register a local account, then configure at least one provider in **Settings**.
 
-# Terminal 2: Start frontend service (port 5173)
-npm run client:dev
+Default endpoints:
+
+- Web client: `http://localhost:5173`
+- API and health check: `http://127.0.0.1:3001/api`
+
+The server binds to `127.0.0.1` by default. Do not change `HOST` to a public interface without also setting a narrow `CORS_ORIGINS` list and understanding that provider credentials are stored locally in plaintext.
+
+## Provider configuration
+
+UI settings take precedence over environment fallbacks for the signed-in user.
+
+```env
+OPENAI_API_KEY=
+OPENAI_BASE_URL=https://api.openai.com/v1
+OPENAI_DEFAULT_MODEL=gpt-5
+
+CLAUDE_API_KEY=
+CLAUDE_BASE_URL=https://api.anthropic.com
+CLAUDE_DEFAULT_MODEL=claude-sonnet-4
+
+GEMINI_API_KEY=
+GEMINI_DEFAULT_MODEL=gemini-2.5-pro
+
+XAI_API_KEY=
+XAI_BASE_URL=https://api.x.ai/v1
+XAI_DEFAULT_MODEL=grok-4
+
+OLLAMA_BASE_URL=http://localhost:11434
+OLLAMA_DEFAULT_MODEL=llama-4-scout
 ```
 
-### Step 4: Start Using
+For Ollama, use the server root such as `http://localhost:11434`, not `/v1`. ONMI normalizes older `/v1` values and uses Ollama's native chat and model endpoints.
 
-1. 🌐 Visit `http://localhost:5173`
-2. 👤 **Register/Login**: Create a new account or login with existing username
-3. 💬 Start chatting directly, or configure AI services first
-4. ⚙️ Click the settings button to configure API keys (optional)
-5. ✅ Click "Test Connection" to verify configuration
-6. 🎯 Select your default model
-7. 🎉 Start chatting!
+An adapter being present does not guarantee that every model revision is compatible. Use the connection/model test in Settings before relying on a configuration.
 
-### Step 5: Data Management (Optional)
+## Local data and security
 
-- 📤 **Export Data**: Backup your conversations and settings
-- 📥 **Import Data**: Restore from backup files
-- 🔄 **Switch Users**: Each user has isolated data
+The default database is:
 
-### Step 6: Production Deployment
+```text
+data/database.json
+```
+
+Set `GEMINI_VIDEO_WEBUI_DB_PATH` to use another location. Automated tests always use an isolated temporary database.
+
+Important security properties:
+
+- Provider API keys are currently stored in plaintext in the local database. OS keychain or master-password encryption is not implemented.
+- Session tokens are random opaque values; only their SHA-256 hashes and expiry times are persisted.
+- Upgrading from the older in-memory token implementation requires signing in once again.
+- Standard backup v2 files exclude API keys and never include sessions.
+- “Include credentials” creates a sensitive plaintext backup and requires explicit confirmation.
+- Replace imports require an additional destructive-action confirmation.
+- Database migrations create a backup first. Integrity findings are reported but orphaned records are never deleted automatically.
+
+Treat the database and credential-bearing backups like password files. Do not commit, email, or upload them to untrusted services.
+
+## Verification
 
 ```bash
-# Build frontend
+npm run verify
+npm run test:e2e
+```
+
+`verify` runs TypeScript checks, ESLint, all Vitest tests, and a production frontend build. The Playwright smoke suite starts the app with an isolated database and a local mock Ollama server; it never calls a real AI provider.
+
+Additional commands:
+
+```bash
+npm run test:run
+npm run test:coverage
+npm run check
+npm run lint
 npm run build
-
-# Start production server
-npm start
 ```
 
-## 🔧 Configuration Verification
+The test suite covers critical database, authentication, chat-context, provider, and UI regressions. It does not prove that third-party provider APIs are available, that every remote model behaves identically, or that ONMI is suitable for hostile multi-tenant hosting.
 
-### Check Service Status
-After starting the application, check if the terminal output includes:
-```
-Server ready on port 3001
-```
+## Architecture
 
-### Check Frontend Service
-Successful frontend startup will display:
-```
-➜  Local:   http://localhost:5173/
-➜  Network: use --host to expose
+```text
+React/Vite client
+      │ authenticated fetch + SSE
+      ▼
+Express API ── provider adapters ── OpenAI / Claude / Gemini / xAI / Ollama
+      │
+      └── local JSON database (users, hashed sessions, configs, chats)
 ```
 
-## ❓ Troubleshooting
+Main directories:
 
-### Q: AI provider test connection failed
-**A**: 
-- Confirm API key format is correct
-- Check network connection
-- Verify API key is valid and has sufficient balance
-
-### Q: Port already in use
-**A**: 
-```bash
-# Check port usage
-netstat -ano | findstr :3001
-netstat -ano | findstr :5173
-
-# Or modify port configuration
-# Frontend: modify server.port in vite.config.ts
-# Backend: modify PORT in api/server.ts
+```text
+src/        React pages, chat UI, stores, hooks, and i18n
+api/        Express routes, auth, migrations, database, and provider adapters
+e2e/        Isolated Playwright smoke tests
+data/       Ignored local runtime data
 ```
 
-### Q: No chat history showing?
-**A**: This is normal for first-time use. Local storage will automatically create demo data on first use.
+All routes except `/api/auth/*` and `/api/health` pass through authentication middleware. User data access must remain scoped through the authenticated user, never a trusted client-supplied ID.
 
-## Project Structure
+Notable endpoints:
 
-```
-├── api/                    # Backend Express.js API
-│   ├── routes/            # API route handlers
-│   ├── services/          # AI service adapters and managers
-│   └── app.ts            # Express app configuration
-├── src/                   # Frontend React application
-│   ├── components/       # Reusable React components
-│   ├── pages/           # Page components
-│   ├── hooks/           # Custom React hooks
-│   └── lib/            # Utility functions
-├── data/                 # Local data storage folder
-│   └── database.json    # Chat data storage (auto-created)
-└── public/              # Static assets
-```
+- `POST /api/auth/register`, `POST /api/auth/login`, `GET /api/auth/me`, `POST /api/auth/logout`
+- `GET /api/chat/conversations`, `PATCH /api/chat/conversations/:id`, `DELETE /api/chat/conversations`
+- `GET /api/chat/conversations/:id/messages`, `POST /api/chat/conversations/:id/fork`, `POST /api/chat`
+- `GET /api/data/preview/:userId`, `GET /api/data/export/:userId`, `POST /api/data/import/:userId`
+- `GET /api/data/health`
+- `GET /api/business/usage/:userId`
 
-## API Endpoints
+## Deployment limits
 
-### Authentication Endpoints
-- `POST /api/auth/register` - Register new user account
-- `POST /api/auth/login` - User login
-- `GET /api/auth/user/:userId` - Get user information
-- `GET /api/auth/check-username/:username` - Check username availability
+- `npm run build` builds the browser client; this repository intentionally has no cloud/serverless deployment configuration.
+- The JSON database is single-machine storage and is not safe for horizontally scaled or ephemeral hosting.
+- Keep the API on localhost unless you add an appropriate reverse proxy, TLS, origin policy, rate limiting, durable shared storage, and a secrets strategy.
 
-### Chat Endpoints
-- `GET /api/chat/conversations` - Fetch user conversations
-- `POST /api/chat` - Send message and get AI response
-- `GET /api/chat/:conversationId/messages` - Get conversation messages
+## Contributor notes
 
-### Provider Endpoints
-- `GET /api/providers` - Get available AI providers and their configurations
-- `GET /api/providers/supported` - Get list of supported AI providers
+- The backend is ESM. TypeScript source imports use explicit `.js` extensions for Node resolution.
+- Chat transport is SSE, not Socket.IO.
+- Keep route handlers thin and shared behavior in `api/services/`.
+- Preserve the dual `data`/`conversations` list response while older clients may depend on it.
+- Never log provider credentials, raw session tokens, or complete sensitive request objects.
+- Keep `README.md` and `README.zh-CN.md` behaviorally synchronized.
 
-### Data Management Endpoints
-- `GET /api/data/export/:userId` - Export user data
-- `POST /api/data/import/:userId` - Import user data
-- `GET /api/data/preview/:userId` - Get export data preview
-
-### Business Endpoints (Future)
-- `GET /api/business/subscription/:userId` - Get subscription information
-- `GET /api/business/usage/:userId` - Get API usage statistics
-- `GET /api/business/plans` - Get available subscription plans
-
-## 🤖 Supported AI Providers
-
-| Provider | Latest Models | Configuration | How to Get |
-|----------|---------------|---------------|------------|
-| **OpenAI** | GPT-4o, GPT-4o-mini, GPT-4-turbo, GPT-3.5-turbo | API Key | [Get API Key](https://platform.openai.com/api-keys) |
-| **Google Gemini** | Gemini-2.5-Pro, Gemini-2.5-Flash, Gemini-2.0-Flash | API Key | [Get API Key](https://aistudio.google.com/app/apikey) |
-| **Anthropic Claude** | Claude-3.5-Sonnet, Claude-3-Opus, Claude-3.5-Haiku | API Key | [Get API Key](https://console.anthropic.com/) |
-| **xAI Grok** | Grok-4, Grok-3, Grok-2-1212, Grok-2-Vision | API Key | [Get API Key](https://console.x.ai/) |
-| **Ollama** | Custom Large Language Model (LLM) | Local Installation | [Download Ollama](https://ollama.ai/) |
-
-### 💰 Pricing Information
-- **OpenAI**: Pay-per-use, GPT-4o ~$0.005/1K tokens
-- **Google Gemini**: Free tier available, pay-per-use after limit
-- **Anthropic Claude**: Pay-per-use, Claude-3.5-Sonnet ~$0.003/1K tokens
-- **xAI Grok**: Pay-per-use
-- **Ollama**: Completely free, runs locally
-
-### 🚀 Recommended Configuration
-- **New Users**: Start with Google Gemini (has free tier)
-- **Advanced Users**: OpenAI GPT-4o or Claude-3.5-Sonnet (best performance)
-- **Local Deployment**: Ollama + Llama3.3 (completely offline, privacy protection)
-
-## 🏦 Model Bank
-
-The application uses a "Model Bank" system to manage model parameters (context window, max tokens, capabilities, etc.) locally. This ensures the UI always reflects the accurate capabilities of each model.
-
-### Updating Model Definitions
-
-To update the local model database with the latest models from providers:
-
-1. **Configure API Keys**: Ensure your `.env` file has valid API keys.
-2. **Run Update Scripts**:
-
-```bash
-# Update OpenAI models (fetches from API and Azure docs)
-node scripts/update-openai-data.cjs
-
-# Update Gemini models (fetches from Google API)
-node scripts/update-gemini-data.cjs
-```
-
-These scripts will:
-- Fetch the latest model lists from the respective APIs
-- Update the JSON configuration files in `src/lib/model-parameters/data/`
-- Create backups of the previous configurations automatically
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Add tests if applicable
-5. Submit a pull request
-
-## License
-
-This project is licensed under the MIT License.
+No project license is currently declared.
