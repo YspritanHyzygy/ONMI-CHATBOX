@@ -1,6 +1,6 @@
 import { Router, type Request, type Response } from 'express';
 import { aiServiceManager } from '../services/ai-service-manager.js';
-import type { AIProvider, AIServiceConfig } from '../services/types.js';
+import type { AIProvider, AIServiceConfig, ChatMessage } from '../services/types.js';
 import {
   validateAIServiceConfig,
   validateChatRequest
@@ -72,6 +72,7 @@ interface ChatDatabase {
   }): Promise<{ conversation: ConversationRecord; message: MessageRecord }>;
   getConversationsByUserId(userId: string): Promise<DatabaseResult<ConversationRecord[]>>;
   getMessagesByConversationId(conversationId: string): Promise<DatabaseResult<MessageRecord[]>>;
+  deleteTrailingAssistantMessage(conversationId: string): Promise<DatabaseResult<MessageRecord>>;
   forkConversationForUser(userId: string, conversationId: string): Promise<DatabaseResult<{
     conversation: ConversationRecord;
     messages: MessageRecord[];
@@ -184,6 +185,58 @@ async function persistAssistantMessage(
   return data;
 }
 
+/**
+ * 解析并校验一轮生成所需的 provider 配置。
+ * 失败时直接写出 4xx 响应并返回 null。
+ */
+async function resolveTurnConfig(
+  res: Response,
+  provider: AIProvider,
+  model: string | undefined,
+  parameters: unknown,
+  userId: string
+): Promise<{ aiConfig: AbortableAIConfig; actualProvider: AIProvider; finalModel: string } | null> {
+  const configLookup = await configManager.findUserConfig(userId, provider);
+  if (!configLookup.found || !configLookup.config) {
+    res.status(400).json({
+      success: false,
+      error: configManager.getConfigErrorMessage(provider, configLookup)
+    });
+    return null;
+  }
+
+  const providerConfig = configLookup.config;
+  const configValidation = configManager.validateConfig(provider, providerConfig);
+  if (!configValidation.valid) {
+    res.status(400).json({
+      success: false,
+      error: configManager.getValidationErrorMessage(provider, configValidation)
+    });
+    return null;
+  }
+
+  const finalModel = (model || providerConfig.default_model || '').trim();
+  if (!finalModel) {
+    res.status(400).json({ success: false, error: 'A model must be selected' });
+    return null;
+  }
+
+  const actualProvider = configManager.getActualProvider(provider, providerConfig, parameters);
+  const aiConfig = configManager.toAIServiceConfig(
+    actualProvider,
+    providerConfig,
+    finalModel,
+    parameters
+  ) as AbortableAIConfig;
+  const serviceValidation = validateAIServiceConfig(aiConfig);
+  if (!serviceValidation.valid) {
+    res.status(400).json({ success: false, error: serviceValidation.errors.join(', ') });
+    return null;
+  }
+
+  return { aiConfig, actualProvider, finalModel };
+}
+
 async function handleChatRequest(
   req: Request,
   res: Response,
@@ -225,43 +278,9 @@ async function handleChatRequest(
 
   // Provider, configuration and final model are resolved before any write. A
   // missing provider must never leave behind an empty conversation.
-  const configLookup = await configManager.findUserConfig(scopedUser.userId, provider);
-  if (!configLookup.found || !configLookup.config) {
-    res.status(400).json({
-      success: false,
-      error: configManager.getConfigErrorMessage(provider, configLookup)
-    });
-    return;
-  }
-
-  const providerConfig = configLookup.config;
-  const configValidation = configManager.validateConfig(provider, providerConfig);
-  if (!configValidation.valid) {
-    res.status(400).json({
-      success: false,
-      error: configManager.getValidationErrorMessage(provider, configValidation)
-    });
-    return;
-  }
-
-  const finalModel = (model || providerConfig.default_model || '').trim();
-  if (!finalModel) {
-    res.status(400).json({ success: false, error: 'A model must be selected' });
-    return;
-  }
-
-  const actualProvider = configManager.getActualProvider(provider, providerConfig, parameters);
-  const aiConfig = configManager.toAIServiceConfig(
-    actualProvider,
-    providerConfig,
-    finalModel,
-    parameters
-  ) as AbortableAIConfig;
-  const serviceValidation = validateAIServiceConfig(aiConfig);
-  if (!serviceValidation.valid) {
-    res.status(400).json({ success: false, error: serviceValidation.errors.join(', ') });
-    return;
-  }
+  const turnConfig = await resolveTurnConfig(res, provider, model, parameters, scopedUser.userId);
+  if (!turnConfig) return;
+  const { aiConfig, actualProvider, finalModel } = turnConfig;
 
   const db = await getChatDatabase();
   let prepared: { conversation: ConversationRecord; message: MessageRecord };
@@ -296,6 +315,38 @@ async function handleChatRequest(
     return;
   }
 
+  await executeAssistantTurn(res, {
+    db,
+    conversation: prepared.conversation,
+    messages,
+    aiConfig,
+    actualProvider,
+    finalModel,
+    streamRequested,
+    userMessage: prepared.message
+  });
+}
+
+/**
+ * 执行一轮助手生成（SSE 或非流式），并持久化结果。
+ * 发送消息与"重新生成"共用：调用前上下文（messages）必须已构建完毕，
+ * 且最后一条为用户消息。
+ */
+interface AssistantTurnContext {
+  db: ChatDatabase;
+  conversation: ConversationRecord;
+  messages: ChatMessage[];
+  aiConfig: AbortableAIConfig;
+  actualProvider: AIProvider;
+  finalModel: string;
+  streamRequested: boolean;
+  userMessage?: MessageRecord;
+}
+
+async function executeAssistantTurn(res: Response, context: AssistantTurnContext): Promise<void> {
+  const { db, conversation, messages, aiConfig, actualProvider, finalModel, streamRequested } = context;
+  const targetConversationId = conversation.id;
+
   const abortController = new AbortController();
   aiConfig.signal = abortController.signal;
   res.once('close', () => {
@@ -303,7 +354,7 @@ async function handleChatRequest(
   });
 
   if (streamRequested) {
-    startSse(res, prepared.conversation);
+    startSse(res, conversation);
   }
 
   try {
@@ -399,7 +450,7 @@ async function handleChatRequest(
       success: true,
       response: aiResponse.content,
       conversationId: targetConversationId,
-      data: { userMessage: prepared.message, aiMessage }
+      data: { userMessage: context.userMessage, aiMessage }
     });
   } catch (error: unknown) {
     const rawMessage = error instanceof Error ? error.message : 'Provider request failed';
@@ -557,6 +608,87 @@ router.post('/conversations/:conversationId/messages', async (req: Request, res:
     message: req.body?.content,
     stream: req.body?.stream === true
   });
+});
+
+/**
+ * 重新生成会话末尾的助手回复：删除该回复后基于同一条用户消息重新执行一轮。
+ * 上一轮以错误/取消告终（助手消息未持久化）时等价于重试。
+ */
+router.post('/conversations/:conversationId/regenerate', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const conversationId = routeParam(req, 'conversationId');
+    const scopedUser = resolveAuthenticatedUserId(req);
+    if (!scopedUser.ok) {
+      res.status(scopedUser.status).json({ success: false, error: scopedUser.error });
+      return;
+    }
+
+    // 复用 validateChatRequest 的 provider/model/parameters 校验；message 仅为占位
+    const validation = validateChatRequest({
+      ...(typeof req.body === 'object' && req.body !== null ? req.body : {}),
+      message: 'regenerate',
+      conversationId
+    });
+    if (!validation.valid || !validation.data) {
+      res.status(400).json({ success: false, error: validation.errors.join(', ') });
+      return;
+    }
+    const { provider, model, parameters } = validation.data;
+
+    const turnConfig = await resolveTurnConfig(res, provider, model, parameters, scopedUser.userId);
+    if (!turnConfig) return;
+    const { aiConfig, actualProvider, finalModel } = turnConfig;
+
+    const db = await getChatDatabase();
+    const access = getConversationAccess(db, conversationId, scopedUser.userId);
+    if (!access.ok) {
+      res.status(access.status).json({ success: false, error: access.error });
+      return;
+    }
+
+    const removal = await db.deleteTrailingAssistantMessage(conversationId);
+    if (removal.error) {
+      res.status(500).json({ success: false, error: 'Failed to prepare regeneration' });
+      return;
+    }
+
+    const historyResult = await db.getMessagesByConversationId(conversationId);
+    if (historyResult.error) {
+      res.status(500).json({ success: false, error: 'Failed to load conversation context' });
+      return;
+    }
+
+    const messages = buildChatContext(historyResult.data, actualProvider, { maxCompletedTurns: 10 });
+    const lastContextMessage = messages[messages.length - 1];
+    if (!lastContextMessage || lastContextMessage.role !== 'user') {
+      res.status(400).json({
+        success: false,
+        error: 'Nothing to regenerate: the conversation has no trailing user message'
+      });
+      return;
+    }
+
+    const streamRequested = req.query['stream'] === 'true' || req.body?.stream === true;
+    await executeAssistantTurn(res, {
+      db,
+      conversation: access.conversation,
+      messages,
+      aiConfig,
+      actualProvider,
+      finalModel,
+      streamRequested
+    });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? sanitizeErrorMessage(error.message) : 'Unknown error';
+    console.error('[Chat] Regenerate failed', message);
+    if (!res.headersSent) {
+      res.status(500).json({ success: false, error: 'Failed to regenerate response' });
+    } else if (!res.destroyed) {
+      writeSse(res, { type: 'error', error: 'Failed to regenerate response', content: '', done: true });
+      res.write('data: [DONE]\n\n');
+      res.end();
+    }
+  }
 });
 
 router.delete('/conversations/:conversationId', async (req: Request, res: Response): Promise<void> => {

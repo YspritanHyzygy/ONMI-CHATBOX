@@ -429,3 +429,65 @@ describe('JSON Database - Corruption Recovery', () => {
     db.clearLocks();
   });
 });
+
+describe('JSON Database - deleteTrailingAssistantMessage', () => {
+  let tempDir: string;
+  let db: JSONDatabase;
+
+  beforeEach(async () => {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'gemini-video-webui-regen-'));
+    db = new JSONDatabase(path.join(tempDir, 'database.json'));
+    await db.init();
+  });
+
+  afterEach(async () => {
+    db.clearLocks();
+    await fs.rm(tempDir, { recursive: true, force: true });
+  });
+
+  async function seedConversation(messages: Array<{ role: string; content: string }>) {
+    const { data: conversation } = await db.from('conversations').insert({
+      user_id: 'regen-user',
+      title: 'Regen test',
+      provider_used: 'ollama',
+      model_used: 'qwen3'
+    });
+    for (const message of messages) {
+      const { error } = await db.from('messages').insert({
+        conversation_id: conversation!.id,
+        ...message
+      });
+      expect(error).toBeNull();
+    }
+    return conversation!.id as string;
+  }
+
+  it('removes only the trailing assistant message', async () => {
+    const conversationId = await seedConversation([
+      { role: 'user', content: 'q1' },
+      { role: 'assistant', content: 'a1' },
+      { role: 'user', content: 'q2' },
+      { role: 'assistant', content: 'a2' }
+    ]);
+
+    const { data: removed, error } = await db.deleteTrailingAssistantMessage(conversationId);
+    expect(error).toBeNull();
+    expect(removed?.content).toBe('a2');
+
+    const { data: remaining } = await db.getMessagesByConversationId(conversationId);
+    expect(remaining?.map((message) => message.content)).toEqual(['q1', 'a1', 'q2']);
+  });
+
+  it('is a no-op when the trailing message is from the user', async () => {
+    const conversationId = await seedConversation([
+      { role: 'user', content: 'q1' }
+    ]);
+
+    const { data: removed, error } = await db.deleteTrailingAssistantMessage(conversationId);
+    expect(error).toBeNull();
+    expect(removed).toBeNull();
+
+    const { data: remaining } = await db.getMessagesByConversationId(conversationId);
+    expect(remaining).toHaveLength(1);
+  });
+});

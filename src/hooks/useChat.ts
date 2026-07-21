@@ -173,6 +173,83 @@ async function readWithTimeout(reader: ReadableStreamDefaultReader<Uint8Array>) 
   }
 }
 
+/** 一轮生成过程中累积的助手消息内容（正文 + 思维链） */
+interface StreamSnapshot {
+  content: string;
+  thinkingContent: string;
+  thinkingTokens?: number;
+  reasoningEffort?: string;
+  thoughtSignature?: string;
+}
+
+/**
+ * 消费 /api/chat 系列端点的 SSE 响应（发送与重新生成共用）。
+ * 每收到一块数据调用 onProgress(snapshot, finished)；[DONE] 时 finished=true。
+ * 服务端错误、空流、断流、闲置超时均以异常抛出（超时时错误信息为
+ * 'STREAM_IDLE_TIMEOUT'，由调用方决定如何提示并中止）。
+ */
+async function consumeAssistantSse(options: {
+  response: Response;
+  emptyStreamError: string;
+  incompleteError: string;
+  onConversation?: (conversationId: string, title?: string) => void;
+  onProgress: (snapshot: StreamSnapshot, finished: boolean) => void;
+}): Promise<void> {
+  const reader = options.response.body?.getReader();
+  if (!reader) throw new Error(options.emptyStreamError);
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let finished = false;
+  const snapshot: StreamSnapshot = { content: '', thinkingContent: '' };
+
+  const processData = (dataText: string) => {
+    if (!dataText) return;
+    if (dataText === '[DONE]') {
+      finished = true;
+      options.onProgress({ ...snapshot }, true);
+      return;
+    }
+    const data = JSON.parse(dataText) as JsonRecord;
+    if (data.type === 'conversation') {
+      options.onConversation?.(getString(data.conversationId), getString(data.title));
+      return;
+    }
+    if (typeof data.error === 'string') throw new Error(data.error);
+    if (typeof data.content === 'string') snapshot.content += data.content;
+    const thinking = data.thinking && typeof data.thinking === 'object' ? data.thinking as JsonRecord : null;
+    if (thinking && typeof thinking.content === 'string') snapshot.thinkingContent += thinking.content;
+    if (thinking && typeof thinking.tokens === 'number') snapshot.thinkingTokens = thinking.tokens;
+    if (thinking && typeof thinking.effort === 'string') snapshot.reasoningEffort = thinking.effort;
+    if (thinking && typeof thinking.signature === 'string') snapshot.thoughtSignature = thinking.signature;
+    options.onProgress({ ...snapshot }, false);
+  };
+
+  const processBuffer = (flush = false) => {
+    const lines = buffer.split(/\r?\n/);
+    buffer = flush ? '' : lines.pop() || '';
+    for (const line of lines) {
+      if (!line.startsWith('data:')) continue;
+      processData(line.slice(5).trim());
+    }
+  };
+
+  try {
+    while (!finished) {
+      const { done, value } = await readWithTimeout(reader);
+      if (done) {
+        buffer += decoder.decode();
+        processBuffer(true);
+        break;
+      }
+      buffer += decoder.decode(value, { stream: true });
+      processBuffer();
+    }
+    if (!finished) throw new Error(options.incompleteError);
+  } finally {
+    try { reader.releaseLock(); } catch { /* stream already released */ }
+  }
+}
+
 export function useChat() {
   const { t } = useTranslation();
   const [conversations, setConversations] = useState<Conversation[]>([]);
@@ -625,7 +702,6 @@ export function useChat() {
     let thinkingTokens: number | undefined;
     let reasoningEffort: string | undefined;
     let thoughtSignature: string | undefined;
-    let streamFinished = false;
     let streamTimedOut = false;
 
     const matchesActiveTurn = (conversation: Conversation) => (
@@ -710,75 +786,31 @@ export function useChat() {
 
       const contentType = response.headers.get('content-type') || '';
       if (contentType.includes('text/event-stream')) {
-        const reader = response.body?.getReader();
-        if (!reader) throw new Error(t('chat.emptyStream', { defaultValue: 'The server returned an empty stream.' }));
-        const decoder = new TextDecoder();
-        let buffer = '';
-
-        const processData = (dataText: string) => {
-          if (!dataText) return;
-          if (dataText === '[DONE]') {
-            streamFinished = true;
-            updateAssistant({
-              content: fullContent,
-              isTyping: false,
-              status: 'complete',
-              error: undefined,
-              hasThinking: Boolean(fullThinkingContent),
-              thinkingContent: fullThinkingContent || undefined,
-              thinkingTokens,
-              reasoningEffort,
-              thoughtSignature,
-            });
-            return;
-          }
-          const data = JSON.parse(dataText) as JsonRecord;
-          if (data.type === 'conversation') {
-            applyConversationMetadata(getString(data.conversationId), getString(data.title));
-            return;
-          }
-          if (typeof data.error === 'string') throw new Error(data.error);
-          if (typeof data.content === 'string') fullContent += data.content;
-          const thinking = data.thinking && typeof data.thinking === 'object' ? data.thinking as JsonRecord : null;
-          if (thinking && typeof thinking.content === 'string') fullThinkingContent += thinking.content;
-          if (thinking && typeof thinking.tokens === 'number') thinkingTokens = thinking.tokens;
-          if (thinking && typeof thinking.effort === 'string') reasoningEffort = thinking.effort;
-          if (thinking && typeof thinking.signature === 'string') thoughtSignature = thinking.signature;
-          updateAssistant({
-            content: fullContent,
-            isTyping: true,
-            status: 'streaming',
-            hasThinking: Boolean(fullThinkingContent),
-            thinkingContent: fullThinkingContent || undefined,
-            thinkingTokens,
-            reasoningEffort,
-            thoughtSignature,
-          });
-        };
-
-        const processBuffer = (flush = false) => {
-          const lines = buffer.split(/\r?\n/);
-          buffer = flush ? '' : lines.pop() || '';
-          for (const line of lines) {
-            if (!line.startsWith('data:')) continue;
-            processData(line.slice(5).trim());
-          }
-        };
-
         try {
-          while (!streamFinished) {
-            const { done, value } = await readWithTimeout(reader);
-            if (done) {
-              buffer += decoder.decode();
-              processBuffer(true);
-              break;
-            }
-            buffer += decoder.decode(value, { stream: true });
-            processBuffer();
-          }
-          if (!streamFinished) {
-            throw new Error(t('chat.partialResponseNotice', { defaultValue: 'The connection closed before the response completed.' }));
-          }
+          await consumeAssistantSse({
+            response,
+            emptyStreamError: t('chat.emptyStream', { defaultValue: 'The server returned an empty stream.' }),
+            incompleteError: t('chat.partialResponseNotice', { defaultValue: 'The connection closed before the response completed.' }),
+            onConversation: applyConversationMetadata,
+            onProgress: (snapshot, finished) => {
+              fullContent = snapshot.content;
+              fullThinkingContent = snapshot.thinkingContent;
+              thinkingTokens = snapshot.thinkingTokens;
+              reasoningEffort = snapshot.reasoningEffort;
+              thoughtSignature = snapshot.thoughtSignature;
+              updateAssistant({
+                content: fullContent,
+                isTyping: !finished,
+                status: finished ? 'complete' : 'streaming',
+                error: undefined,
+                hasThinking: Boolean(fullThinkingContent),
+                thinkingContent: fullThinkingContent || undefined,
+                thinkingTokens,
+                reasoningEffort,
+                thoughtSignature,
+              });
+            },
+          });
         } catch (error) {
           if (error instanceof Error && error.message === 'STREAM_IDLE_TIMEOUT') {
             streamTimedOut = true;
@@ -786,8 +818,6 @@ export function useChat() {
             throw new Error(t('chat.streamTimeout', { defaultValue: 'The response timed out. You can retry the message.' }));
           }
           throw error;
-        } finally {
-          try { reader.releaseLock(); } catch { /* stream already released */ }
         }
       } else {
         const data = await response.json() as JsonRecord;
@@ -807,7 +837,6 @@ export function useChat() {
           reasoningEffort: getString(aiMessage?.reasoning_effort) || undefined,
           thoughtSignature: getString(aiMessage?.thought_signature) || undefined,
         });
-        streamFinished = true;
       }
     } catch (error) {
       const wasStopped = controller.signal.aborted && !streamTimedOut;
@@ -841,6 +870,147 @@ export function useChat() {
   const stopGeneration = useCallback(() => {
     generationAbortRef.current?.abort();
   }, []);
+
+  /**
+   * 重新生成当前会话最后一条助手回复。
+   * 服务端会删除该回复并基于同一条用户消息重新执行一轮；
+   * 上一轮以错误/取消结束时同样可用（等价于重试）。
+   */
+  const regenerateLastMessage = useCallback(async () => {
+    const conversation = currentConversationRef.current;
+    if (isLoading || !selectedModel) return;
+    if (!conversation || conversation.persisted === false || conversation.id.startsWith('draft-')) return;
+    if (!configuredProviders.includes(selectedModel.provider)) return;
+    const lastMessage = conversation.messages[conversation.messages.length - 1];
+    if (!lastMessage || lastMessage.role !== 'assistant') return;
+
+    const conversationId = conversation.id;
+    const assistantMessageId = randomId('assistant-');
+    const assistantMessage: Message = {
+      id: assistantMessageId,
+      content: '',
+      role: 'assistant',
+      timestamp: new Date(),
+      isTyping: true,
+      status: 'streaming',
+    };
+
+    const replaceTrailingAssistant = (target: Conversation): Conversation => ({
+      ...target,
+      messages: [...target.messages.slice(0, -1), assistantMessage],
+    });
+    setCurrentConversation((previous) => {
+      const next = previous && previous.id === conversationId ? replaceTrailingAssistant(previous) : previous;
+      currentConversationRef.current = next;
+      return next;
+    });
+    setConversations((previous) => {
+      const next = previous.map((item) => (item.id === conversationId ? replaceTrailingAssistant(item) : item));
+      conversationsRef.current = next;
+      return next;
+    });
+    setIsLoading(true);
+
+    const controller = new AbortController();
+    generationAbortRef.current = controller;
+    let snapshotState: StreamSnapshot = { content: '', thinkingContent: '' };
+    let streamTimedOut = false;
+
+    const updateAssistant = (patch: Partial<Message>) => {
+      const update = (target: Conversation): Conversation => ({
+        ...target,
+        messages: target.messages.map((message) => (
+          message.id === assistantMessageId ? { ...message, ...patch } : message
+        )),
+      });
+      setCurrentConversation((previous) => {
+        const next = previous && previous.id === conversationId ? update(previous) : previous;
+        currentConversationRef.current = next;
+        return next;
+      });
+      setConversations((previous) => {
+        const next = previous.map((item) => (item.id === conversationId ? update(item) : item));
+        conversationsRef.current = next;
+        return next;
+      });
+    };
+
+    try {
+      const url = new URL(
+        `/api/chat/conversations/${encodeURIComponent(conversationId)}/regenerate`,
+        window.location.origin,
+      );
+      url.searchParams.set('stream', 'true');
+      const response = await fetchWithAuth(url.toString(), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          provider: selectedModel.provider,
+          model: selectedModel.model,
+          parameters: aiParameters,
+        }),
+        signal: controller.signal,
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(getErrorMessage(payload, `${t('chat.sendMessageError')} (${response.status})`));
+      }
+
+      try {
+        await consumeAssistantSse({
+          response,
+          emptyStreamError: t('chat.emptyStream', { defaultValue: 'The server returned an empty stream.' }),
+          incompleteError: t('chat.partialResponseNotice', { defaultValue: 'The connection closed before the response completed.' }),
+          onProgress: (snapshot, finished) => {
+            snapshotState = snapshot;
+            updateAssistant({
+              content: snapshot.content,
+              isTyping: !finished,
+              status: finished ? 'complete' : 'streaming',
+              error: undefined,
+              hasThinking: Boolean(snapshot.thinkingContent),
+              thinkingContent: snapshot.thinkingContent || undefined,
+              thinkingTokens: snapshot.thinkingTokens,
+              reasoningEffort: snapshot.reasoningEffort,
+              thoughtSignature: snapshot.thoughtSignature,
+            });
+          },
+        });
+      } catch (error) {
+        if (error instanceof Error && error.message === 'STREAM_IDLE_TIMEOUT') {
+          streamTimedOut = true;
+          controller.abort();
+          throw new Error(t('chat.streamTimeout', { defaultValue: 'The response timed out. You can retry the message.' }));
+        }
+        throw error;
+      }
+    } catch (error) {
+      const wasStopped = controller.signal.aborted && !streamTimedOut;
+      const message = wasStopped
+        ? t('chat.stoppedResponseNotice', { defaultValue: 'Stopped by you. The partial response was not added to future context.' })
+        : error instanceof Error
+          ? error.message
+          : t('chat.unknownError');
+      updateAssistant({
+        content: snapshotState.content,
+        isTyping: false,
+        status: wasStopped ? 'cancelled' : 'error',
+        error: message,
+        hasThinking: Boolean(snapshotState.thinkingContent),
+        thinkingContent: snapshotState.thinkingContent || undefined,
+        thinkingTokens: snapshotState.thinkingTokens,
+        reasoningEffort: snapshotState.reasoningEffort,
+        thoughtSignature: snapshotState.thoughtSignature,
+      });
+    } finally {
+      if (generationAbortRef.current === controller) generationAbortRef.current = null;
+      setIsLoading(false);
+      setConversations((previous) => {
+        saveConversationsToStorage(previous);
+        return previous;
+      });
+    }
+  }, [aiParameters, configuredProviders, isLoading, saveConversationsToStorage, selectedModel, t]);
 
   const handleKeyPress = useCallback((event: React.KeyboardEvent) => {
     if (event.key === 'Enter' && !event.shiftKey) {
@@ -973,6 +1143,7 @@ export function useChat() {
     handleModelChange,
     handleSendMessage,
     stopGeneration,
+    regenerateLastMessage,
     handleKeyPress,
     createNewConversation,
     forkCurrentConversation,

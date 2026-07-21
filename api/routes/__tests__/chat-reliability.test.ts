@@ -132,6 +132,14 @@ function configuredDb(options: { failAssistantPersistence?: boolean } = {}) {
   const update = vi.fn(() => ({
     eq: vi.fn().mockResolvedValue({ data: { id: 'conversation-1' }, error: null })
   }));
+  const select = vi.fn(() => ({
+    data: [{ id: 'conversation-1', user_id: 'user-1', title: 'Question' }],
+    error: null
+  }));
+  const deleteTrailingAssistantMessage = vi.fn().mockResolvedValue({
+    data: { id: 'assistant-0', role: 'assistant', content: 'old answer' },
+    error: null
+  });
   const db = {
     prepareChatTurn: vi.fn().mockResolvedValue({
       conversation: { id: 'conversation-1', title: 'Question' },
@@ -141,9 +149,25 @@ function configuredDb(options: { failAssistantPersistence?: boolean } = {}) {
       data: [{ id: 'user-1', content: 'Question', role: 'user' }],
       error: null
     }),
-    from: vi.fn((table: string) => table === 'messages' ? { insert } : { update })
+    deleteTrailingAssistantMessage,
+    from: vi.fn((table: string) => table === 'messages' ? { insert } : { select, update })
   };
-  return { db, insert };
+  return { db, insert, deleteTrailingAssistantMessage };
+}
+
+function regeneratePostHandler() {
+  interface RouterLayer {
+    route?: {
+      path: string;
+      methods?: Record<string, boolean>;
+      stack: Array<{ handle: (req: Request, res: Response) => Promise<void> }>;
+    };
+  }
+  const layer = (chatRouter as unknown as { stack: RouterLayer[] }).stack.find(item => (
+    item.route?.path === '/conversations/:conversationId/regenerate' && item.route?.methods?.post
+  ));
+  if (!layer?.route) throw new Error('regenerate route not found');
+  return layer.route.stack[0].handle;
 }
 
 describe('chat route reliability', () => {
@@ -286,6 +310,51 @@ describe('chat route reliability', () => {
       reasoning_effort: 'high',
       thought_signature: 'sig-abc'
     }));
+  });
+
+  it('regenerates the trailing assistant reply: deletes it, replays the turn, and persists the new one', async () => {
+    const { db, insert, deleteTrailingAssistantMessage } = configuredDb();
+    mocks.ensureDatabaseInitialized.mockResolvedValue(db);
+    mocks.streamChat.mockImplementation(async function* () {
+      yield { content: 'better answer', done: false, model: 'model-default', provider: 'openai' };
+      yield { content: '', done: true, model: 'model-default', provider: 'openai' };
+    });
+    const capture = createResponse();
+    const request = {
+      body: { provider: 'openai', model: 'model-default', stream: true },
+      query: { stream: 'true' },
+      params: { conversationId: 'conversation-1' }
+    } as unknown as Request;
+
+    await regeneratePostHandler()(request, capture.response);
+
+    expect(deleteTrailingAssistantMessage).toHaveBeenCalledWith('conversation-1');
+    // No new user message may be inserted - only the assistant reply.
+    expect(db.prepareChatTurn).not.toHaveBeenCalled();
+    expect(insert).toHaveBeenCalledOnce();
+    expect(insert).toHaveBeenCalledWith(expect.objectContaining({
+      role: 'assistant',
+      content: 'better answer'
+    }));
+    const payloads = ssePayloads(capture.writes);
+    expect(payloads.at(-1)).toBe('[DONE]');
+  });
+
+  it('rejects regeneration when the conversation has no trailing user message', async () => {
+    const { db, insert } = configuredDb();
+    db.getMessagesByConversationId.mockResolvedValue({ data: [], error: null });
+    mocks.ensureDatabaseInitialized.mockResolvedValue(db);
+    const capture = createResponse();
+    const request = {
+      body: { provider: 'openai', model: 'model-default' },
+      query: {},
+      params: { conversationId: 'conversation-1' }
+    } as unknown as Request;
+
+    await regeneratePostHandler()(request, capture.response);
+
+    expect(capture.statusCode).toBe(400);
+    expect(insert).not.toHaveBeenCalled();
   });
 
   it('aborts the upstream stream and does not persist a partial assistant reply', async () => {

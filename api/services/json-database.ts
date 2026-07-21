@@ -1250,6 +1250,42 @@ export class JSONDatabase {
     });
   }
 
+  /**
+   * 删除会话末尾的助手消息（用于"重新生成"）。
+   * 末尾消息不是助手消息时不做任何修改（上一轮出错/取消时助手消息本就未持久化）。
+   */
+  async deleteTrailingAssistantMessage(conversationId: string) {
+    return this.lockManager.withLock('database-write', async () => {
+      const original = cloneDatabase(this.data);
+      try {
+        if (!conversationId) {
+          throw new DatabaseError('Conversation ID is required', 'INVALID_PARAM');
+        }
+
+        const conversationMessages = this.data.messages
+          .filter(message => message.conversation_id === conversationId);
+        const lastMessage = conversationMessages[conversationMessages.length - 1];
+        if (!lastMessage || lastMessage.role !== 'assistant') {
+          return { data: null, error: null };
+        }
+
+        this.data.messages = this.data.messages.filter(message => message.id !== lastMessage.id);
+        await this.saveData();
+        return { data: lastMessage, error: null };
+      } catch (error) {
+        this.restoreData(original);
+        console.error('Failed to delete trailing assistant message:', safeErrorMessage(error));
+        return {
+          data: null,
+          error: {
+            message: error instanceof DatabaseError ? error.message : 'Failed to delete trailing assistant message',
+            code: error instanceof DatabaseError ? error.code : 'DELETE_ERROR'
+          }
+        };
+      }
+    });
+  }
+
   async forkConversationForUser(userId: string, conversationId: string) {
     return this.lockManager.withLock('database-write', async () => {
       const original = cloneDatabase(this.data);

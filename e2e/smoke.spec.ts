@@ -264,6 +264,37 @@ test('streams and persists an extended-thinking chain through the mocked provide
   expect(assistant?.thinking_content).toBe('Mock reasoning trace');
 });
 
+test('regenerates the last reply and reuses a user message via edit', async ({ page, request }) => {
+  const account = await createAccount(request, 'regen');
+  await waitForMockOllama(request);
+  await configureMockOllama(request, account);
+  await authenticatePage(page, account);
+
+  await page.goto('/chat');
+  const composer = page.getByRole('textbox', { name: 'Chat message' });
+  await composer.fill('Original question');
+  await page.getByRole('button', { name: 'Send' }).click();
+  await expect(page.getByText('Mock ONMI response', { exact: true })).toBeVisible();
+
+  await page.getByRole('button', { name: 'Regenerate response' }).click();
+  await expect(page.getByText('Mock ONMI response', { exact: true })).toBeVisible();
+
+  // Regeneration must not duplicate messages: still exactly user + assistant.
+  const conversationId = new URL(page.url()).searchParams.get('conversation');
+  await expect.poll(async () => {
+    const messages = await request.get(
+      `/api/chat/conversations/${encodeURIComponent(conversationId!)}/messages`,
+      { headers: { Authorization: `Bearer ${account.token}` } },
+    );
+    const payload = await messages.json() as { data?: Array<{ role?: string }> };
+    return payload.data?.map((message) => message.role);
+  }).toEqual(['user', 'assistant']);
+
+  // Edit puts the original text back into the composer for resending.
+  await page.getByRole('button', { name: 'Edit as new message' }).click();
+  await expect(composer).toHaveValue('Original question');
+});
+
 test('loads a deep link and manages sidebar sessions without a real provider call', async ({ page, request }) => {
   const account = await createAccount(request, 'chat');
   await waitForMockOllama(request);

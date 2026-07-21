@@ -205,6 +205,12 @@ export default function Chat() {
             isLoading={chat.isConversationLoading}
             loadError={chat.conversationLoadError}
             onRetry={chat.retryCurrentConversation}
+            onRegenerate={chat.regenerateLastMessage}
+            onEditMessage={(content) => {
+              chat.setInputMessage(content);
+              chat.textareaRef.current?.focus();
+            }}
+            canRegenerate={!chat.isLoading && chat.providerReady && chat.currentConversation?.persisted !== false}
           />
         </div>
 
@@ -499,6 +505,9 @@ interface ChatMessagesProps {
   isLoading: boolean;
   loadError: string | null;
   onRetry: () => void;
+  onRegenerate: () => void;
+  onEditMessage: (content: string) => void;
+  canRegenerate: boolean;
 }
 
 function ChatMessages({
@@ -510,6 +519,9 @@ function ChatMessages({
   isLoading,
   loadError,
   onRetry,
+  onRegenerate,
+  onEditMessage,
+  canRegenerate,
 }: ChatMessagesProps) {
   const t = useCopy();
   const user = useAuthStore((state) => state.user);
@@ -579,6 +591,10 @@ function ChatMessages({
           useResponsesAPI={useResponsesAPI}
           initials={initials}
           bubble={messageStyle === 'bubble'}
+          isLastMessage={index === currentConversation.messages.length - 1}
+          canRegenerate={canRegenerate}
+          onRegenerate={onRegenerate}
+          onEditMessage={onEditMessage}
         />
       ))}
       <div ref={messagesEndRef as RefObject<HTMLDivElement>} />
@@ -593,9 +609,16 @@ interface OnmiMessageProps {
   useResponsesAPI?: boolean;
   initials: string;
   bubble: boolean;
+  isLastMessage: boolean;
+  canRegenerate: boolean;
+  onRegenerate: () => void;
+  onEditMessage: (content: string) => void;
 }
 
-function OnmiMessage({ message, index, conversation, useResponsesAPI, initials, bubble }: OnmiMessageProps) {
+function OnmiMessage({
+  message, index, conversation, useResponsesAPI, initials, bubble,
+  isLastMessage, canRegenerate, onRegenerate, onEditMessage,
+}: OnmiMessageProps) {
   const t = useCopy();
   const isUser = message.role === 'user';
   const content = typeof message.content === 'string' ? message.content : JSON.stringify(message.content);
@@ -660,6 +683,31 @@ function OnmiMessage({ message, index, conversation, useResponsesAPI, initials, 
             <button type="button" className="onmi-btn ghost" onClick={copyMessage} disabled={!content}>
               <Copy size={11} />
               {t('复制', 'Copy')}
+            </button>
+            {isLastMessage && canRegenerate && (
+              <button
+                type="button"
+                className="onmi-btn ghost"
+                onClick={onRegenerate}
+                aria-label={t('重新生成回复', 'Regenerate response')}
+              >
+                <RefreshCw size={11} />
+                {t('重新生成', 'Regenerate')}
+              </button>
+            )}
+          </div>
+        )}
+
+        {!message.isTyping && isUser && (
+          <div className="onmi-message-actions">
+            <button
+              type="button"
+              className="onmi-btn ghost"
+              onClick={() => onEditMessage(content)}
+              aria-label={t('编辑为新消息', 'Edit as new message')}
+            >
+              <Pencil size={11} />
+              {t('编辑', 'Edit')}
             </button>
           </div>
         )}
