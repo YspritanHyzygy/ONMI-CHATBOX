@@ -351,3 +351,81 @@ describe('JSON Database - Concurrent Processing', () => {
     expect(stats3.cacheAge).toBeGreaterThanOrEqual(0);
   });
 });
+
+describe('JSON Database - Corruption Recovery', () => {
+  let tempDir: string;
+  let dbPath: string;
+
+  beforeEach(async () => {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'gemini-video-webui-restore-'));
+    dbPath = path.join(tempDir, 'database.json');
+  });
+
+  afterEach(async () => {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  });
+
+  async function seedDatabaseWithUser(): Promise<void> {
+    const db = new JSONDatabase(dbPath);
+    await db.init();
+    const result = await db.from('users').insert({
+      id: 'restore-user-001',
+      username: 'restore-user-001',
+      passwordHash: 'test-password-hash'
+    });
+    expect(result.error).toBeNull();
+    db.clearLocks();
+  }
+
+  it('restores from the newest valid backup when the main file is corrupt', async () => {
+    await seedDatabaseWithUser();
+    await fs.copyFile(dbPath, `${dbPath}.backup.100.write`);
+    await fs.writeFile(dbPath, '{ this is not valid json', 'utf-8');
+
+    const db = new JSONDatabase(dbPath);
+    await db.init();
+
+    const { data: user } = await db.findUserById('restore-user-001');
+    expect(user?.username).toBe('restore-user-001');
+
+    const files = await fs.readdir(tempDir);
+    expect(files.some((name) => name.includes('.corrupt.'))).toBe(true);
+    db.clearLocks();
+  });
+
+  it('skips corrupt backups and restores from an older valid one', async () => {
+    await seedDatabaseWithUser();
+    const validBackup = `${dbPath}.backup.100.write`;
+    const corruptBackup = `${dbPath}.backup.200.write`;
+    await fs.copyFile(dbPath, validBackup);
+    await fs.writeFile(corruptBackup, 'also broken', 'utf-8');
+    // Ensure the corrupt backup is newer by mtime.
+    const future = new Date(Date.now() + 5000);
+    await fs.utimes(corruptBackup, future, future);
+    await fs.writeFile(dbPath, '%%%', 'utf-8');
+
+    const db = new JSONDatabase(dbPath);
+    await db.init();
+
+    const { data: user } = await db.findUserById('restore-user-001');
+    expect(user?.username).toBe('restore-user-001');
+    db.clearLocks();
+  });
+
+  it('still fails startup when no valid backup exists', async () => {
+    await seedDatabaseWithUser();
+    // Seeding itself produces write backups; remove them so no restore source exists.
+    for (const name of await fs.readdir(tempDir)) {
+      if (name.includes('.backup.')) await fs.rm(path.join(tempDir, name));
+    }
+    await fs.writeFile(dbPath, 'corrupt beyond repair', 'utf-8');
+
+    const db = new JSONDatabase(dbPath);
+    await expect(db.init()).rejects.toThrow('Failed to initialize database');
+
+    // The corrupt file must be left in place untouched.
+    const raw = await fs.readFile(dbPath, 'utf-8');
+    expect(raw).toBe('corrupt beyond repair');
+    db.clearLocks();
+  });
+});

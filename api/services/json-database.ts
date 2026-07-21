@@ -366,9 +366,15 @@ export class JSONDatabase {
           return;
         }
 
-        // Existing files must load successfully. Corrupt data is deliberately
-        // left untouched so startup can fail safely.
-        await this.loadData();
+        // Existing files must load successfully. On corruption, attempt an
+        // automatic restore from the newest valid backup; the corrupt file is
+        // preserved as *.corrupt.<timestamp> so nothing is ever destroyed.
+        try {
+          await this.loadData();
+        } catch (loadError) {
+          const restored = await this.tryRestoreFromBackup();
+          if (!restored) throw loadError;
+        }
       } catch (error) {
         console.error('Database initialization failed:', safeErrorMessage(error));
         throw new DatabaseError(
@@ -378,6 +384,54 @@ export class JSONDatabase {
         );
       }
     });
+  }
+
+  /**
+   * 数据库文件损坏时，从最新的有效备份自动恢复。
+   * 损坏文件保留为 *.corrupt.<timestamp>，绝不销毁；无可用备份时返回 false，
+   * 由调用方按原有"启动失败保护"路径抛出。
+   */
+  private async tryRestoreFromBackup(): Promise<boolean> {
+    try {
+      const dataDir = path.dirname(this.dbPath);
+      const backupPrefix = `${path.basename(this.dbPath)}.backup.`;
+      const files = await fs.readdir(dataDir);
+      const candidates = await Promise.all(
+        files
+          .filter((name) => name.startsWith(backupPrefix))
+          .map(async (name) => {
+            const fullPath = path.join(dataDir, name);
+            const stats = await fs.stat(fullPath);
+            return { fullPath, mtimeMs: stats.mtimeMs };
+          })
+      );
+      candidates.sort((a, b) => b.mtimeMs - a.mtimeMs);
+
+      for (const candidate of candidates) {
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(await fs.readFile(candidate.fullPath, 'utf-8'));
+        } catch {
+          continue;
+        }
+        if (!this.validateDatabaseSchema(parsed)) continue;
+
+        const corruptPath = `${this.dbPath}.corrupt.${Date.now()}`;
+        await fs.rename(this.dbPath, corruptPath);
+        await fs.copyFile(candidate.fullPath, this.dbPath);
+        this.dataCache = null;
+        await this.loadData();
+        console.warn(
+          `[JSONDatabase] Database file was corrupt and has been restored from backup ${path.basename(candidate.fullPath)}. ` +
+          `The corrupt file is preserved at ${path.basename(corruptPath)}.`
+        );
+        return true;
+      }
+      return false;
+    } catch (error) {
+      console.error('[JSONDatabase] Backup restore attempt failed:', safeErrorMessage(error));
+      return false;
+    }
   }
 
   /**
