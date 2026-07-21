@@ -14,7 +14,7 @@
     "check": "tsc --noEmit",
     "server:dev": "cross-env NODE_ENV=development tsx api/server.ts",
     "dev": "concurrently \"npm run client:dev\" \"npm run server:dev\"",
-    "dev:e2e": "concurrently \"vite --host 127.0.0.1\" \"cross-env NODE_ENV=e2e tsx api/server.ts\" \"cross-env MOCK_OLLAMA_PORT=4114 tsx e2e/mock-ollama.ts\"",
+    "dev:e2e": "concurrently \"vite --host 127.0.0.1\" \"cross-env NODE_ENV=e2e PORT=3001 tsx api/server.ts\" \"cross-env MOCK_OLLAMA_PORT=4114 tsx e2e/mock-ollama.ts\"",
     "test": "vitest",
     "test:run": "vitest run",
     "test:coverage": "vitest run --coverage",
