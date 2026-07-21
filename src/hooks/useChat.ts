@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { fetchWithAuth } from '@/lib/fetch';
+import { fetchWithAuth, isPageTearingDown } from '@/lib/fetch';
 import {
   getValidatedConversations,
   getValidatedModel,
@@ -292,7 +292,7 @@ export function useChat() {
       }));
       setProviderConfigState('ready');
     } catch (error) {
-      if (controller.signal.aborted) return;
+      if (controller.signal.aborted || isPageTearingDown()) return;
       console.error('Failed to load user settings:', error);
       setConfiguredProviders([]);
       setProviderConfigState('error');

@@ -1,7 +1,7 @@
 import { useCallback, useState, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { setStorageItem, getStorageItem } from '../lib/storage';
-import { fetchWithAuth } from '../lib/fetch';
+import { fetchWithAuth, isPageTearingDown } from '../lib/fetch';
 import ProviderSettings from '../components/settings/ProviderSettings';
 import UserManagement from '../components/settings/UserManagement';
 import LanguageSettings from '../components/settings/LanguageSettings';
@@ -203,7 +203,7 @@ export default function Settings() {
         throw new Error(result.error || t('settings.loadProvidersFailed', { defaultValue: 'Failed to load supported providers' }));
       }
     } catch (error) {
-      if (signal?.aborted) return;
+      if (signal?.aborted || isPageTearingDown()) return;
       console.error('Failed to load AI service providers:', error);
       setLoadError(error instanceof Error ? error.message : t('settings.loadProvidersFailed', { defaultValue: 'Failed to load supported providers' }));
       throw error;
@@ -234,7 +234,7 @@ export default function Settings() {
         throw new Error(result.error || summaryResult.error || 'Failed to load provider configuration');
       }
     } catch (error) {
-      if (signal?.aborted) return;
+      if (signal?.aborted || isPageTearingDown()) return;
       console.error('加载配置失败:', error);
       setLoadError(error instanceof Error ? error.message : 'Failed to load provider configuration');
       throw error;
