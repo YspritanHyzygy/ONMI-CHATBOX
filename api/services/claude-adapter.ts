@@ -25,6 +25,24 @@ export class ClaudeAdapter implements AIServiceAdapter {
     });
   }
 
+  /**
+   * 启用扩展思考时应用 Anthropic API 的硬性约束：
+   * - thinking.budget_tokens 最小 1024
+   * - 不允许同时传 temperature / top_p
+   * - max_tokens 必须大于 budget_tokens
+   */
+  private applyThinkingParams(requestParams: any, config: AIServiceConfig): void {
+    if (!config.enableThinking) return;
+    const budget = Math.max(
+      1024,
+      config.thinkingBudget && config.thinkingBudget > 0 ? config.thinkingBudget : 8192
+    );
+    requestParams.thinking = { type: 'enabled', budget_tokens: budget };
+    delete requestParams.temperature;
+    delete requestParams.top_p;
+    requestParams.max_tokens = Math.max(requestParams.max_tokens ?? 0, budget + 1024);
+  }
+
   private convertMessages(messages: ChatMessage[]): { messages: any[], system?: string } {
     const systemMessages = messages.filter(msg => msg.role === 'system');
     const userMessages = messages.filter(msg => msg.role !== 'system');
@@ -58,6 +76,8 @@ export class ClaudeAdapter implements AIServiceAdapter {
         requestParams.stop_sequences = Array.isArray(config.stop) ? config.stop : [config.stop];
       }
 
+      this.applyThinkingParams(requestParams, config);
+
       const response = await client.messages.create(requestParams, {
         signal: (config as AbortableConfig).signal
       });
@@ -70,10 +90,18 @@ export class ClaudeAdapter implements AIServiceAdapter {
         throw new AIServiceError('Claude returned no text content', 'claude');
       }
 
+      const thinkingBlock = response.content.find(
+        (block): block is Anthropic.ThinkingBlock => block.type === 'thinking'
+      );
+
       return {
         content: textBlock.text,
         model: response.model,
         provider: 'claude',
+        thinking: thinkingBlock ? {
+          content: thinkingBlock.thinking,
+          signature: thinkingBlock.signature
+        } : undefined,
         usage: response.usage ? {
           promptTokens: response.usage.input_tokens,
           completionTokens: response.usage.output_tokens,
@@ -114,11 +142,33 @@ export class ClaudeAdapter implements AIServiceAdapter {
         streamParams.stop_sequences = Array.isArray(config.stop) ? config.stop : [config.stop];
       }
 
+      this.applyThinkingParams(streamParams, config);
+
       const stream = await client.messages.create(streamParams, {
         signal: (config as AbortableConfig).signal
       });
 
       for await (const chunk of stream as any) {
+        if (chunk.type === 'content_block_delta' && chunk.delta.type === 'thinking_delta') {
+          yield {
+            content: '',
+            done: false,
+            model: config.model,
+            provider: 'claude',
+            thinking: { content: chunk.delta.thinking || '', done: false }
+          };
+        }
+
+        if (chunk.type === 'content_block_delta' && chunk.delta.type === 'signature_delta') {
+          yield {
+            content: '',
+            done: false,
+            model: config.model,
+            provider: 'claude',
+            thinking: { content: '', done: true, signature: chunk.delta.signature }
+          };
+        }
+
         if (chunk.type === 'content_block_delta' && chunk.delta.type === 'text_delta') {
           yield {
             content: chunk.delta.text,
@@ -127,7 +177,7 @@ export class ClaudeAdapter implements AIServiceAdapter {
             provider: 'claude'
           };
         }
-        
+
         if (chunk.type === 'message_stop') {
           yield {
             content: '',

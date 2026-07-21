@@ -24,6 +24,39 @@ export class OpenAIAdapter implements AIServiceAdapter {
     });
   }
 
+  /**
+   * OpenAI Chat Completions 只接受 reasoning_effort（推理模型），不返回思维
+   * 内容本身——链路仍会因 reasoning 生效而提升质量，但 UI 不会有思维过程。
+   */
+  private applyThinkingParams(requestParams: any, config: AIServiceConfig): void {
+    if (!config.enableThinking || !config.reasoningEffort) return;
+    requestParams.reasoning_effort = config.reasoningEffort;
+  }
+
+  /**
+   * 发起请求；模型拒绝 temperature / reasoning_effort 时移除该参数重试。
+   * （不同代模型对这两个参数的支持不一致，第三方 OpenAI 兼容端点更是如此。）
+   */
+  private async createWithParamFallback(client: OpenAI, params: any, config: AIServiceConfig): Promise<any> {
+    const removable = new Set(['temperature', 'reasoning_effort']);
+    for (;;) {
+      try {
+        return await client.chat.completions.create(params, {
+          signal: (config as AbortableConfig).signal
+        });
+      } catch (error: any) {
+        const badParam = typeof error?.param === 'string' ? error.param : '';
+        const removableError = ['unsupported_value', 'unsupported_parameter', 'unknown_parameter'].includes(error?.code);
+        if (removableError && removable.has(badParam) && badParam in params) {
+          console.log(`[OpenAI] 模型 ${config.model} 不支持 ${badParam}，移除后重试`);
+          delete params[badParam];
+          continue;
+        }
+        throw error;
+      }
+    }
+  }
+
   async chat(messages: ChatMessage[], config: AIServiceConfig): Promise<AIResponse> {
     try {
       const client = this.createClient(config);
@@ -42,29 +75,16 @@ export class OpenAIAdapter implements AIServiceAdapter {
 
       // 默认添加 temperature 参数
       requestParams.temperature = config.temperature ?? 0.7;
+      this.applyThinkingParams(requestParams, config);
 
-      let response;
-      try {
-        response = await client.chat.completions.create(requestParams, {
-          signal: (config as AbortableConfig).signal
-        });
-      } catch (error: any) {
-        // 如果是 temperature 不支持的错误，重试不带 temperature 参数
-        if (error.code === 'unsupported_value' && error.param === 'temperature') {
-          console.log(`[OpenAI] 模型 ${config.model} 不支持自定义 temperature，使用默认值重试`);
-          delete requestParams.temperature;
-          response = await client.chat.completions.create(requestParams, {
-            signal: (config as AbortableConfig).signal
-          });
-        } else {
-          throw error;
-        }
-      }
+      const response = await this.createWithParamFallback(client, requestParams, config);
 
       const choice = response.choices[0];
       if (!choice?.message?.content) {
         throw new AIServiceError('No response content', 'openai');
       }
+
+      const reasoningTokens = (response.usage as any)?.completion_tokens_details?.reasoning_tokens;
 
       return {
         content: choice.message.content,
@@ -73,7 +93,8 @@ export class OpenAIAdapter implements AIServiceAdapter {
         usage: response.usage ? {
           promptTokens: response.usage.prompt_tokens,
           completionTokens: response.usage.completion_tokens,
-          totalTokens: response.usage.total_tokens
+          totalTokens: response.usage.total_tokens,
+          reasoningTokens
         } : undefined
       };
     } catch (error: any) {
@@ -103,24 +124,9 @@ export class OpenAIAdapter implements AIServiceAdapter {
 
       // 默认添加 temperature 参数
       streamParams.temperature = config.temperature ?? 0.7;
+      this.applyThinkingParams(streamParams, config);
 
-      let stream;
-      try {
-        stream = await client.chat.completions.create(streamParams, {
-          signal: (config as AbortableConfig).signal
-        });
-      } catch (error: any) {
-        // 如果是 temperature 不支持的错误，重试不带 temperature 参数
-        if (error.code === 'unsupported_value' && error.param === 'temperature') {
-          console.log(`[OpenAI] 模型 ${config.model} 不支持自定义 temperature，使用默认值重试`);
-          delete streamParams.temperature;
-          stream = await client.chat.completions.create(streamParams, {
-            signal: (config as AbortableConfig).signal
-          });
-        } else {
-          throw error;
-        }
-      }
+      const stream = await this.createWithParamFallback(client, streamParams, config);
 
       for await (const chunk of stream as any) {
         const choice = chunk.choices[0];

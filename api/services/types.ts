@@ -106,6 +106,8 @@ export interface StreamResponse {
   thinking?: {
     content: string;
     done: boolean;
+    tokens?: number; // 思维token数（若提供商在流中报告）
+    signature?: string; // 思维签名（Claude）
   };
 }
 

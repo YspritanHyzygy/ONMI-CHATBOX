@@ -241,6 +241,53 @@ describe('chat route reliability', () => {
     expect(providerDoneIndex).toBe(-1);
   });
 
+  it('forwards thinking chunks over SSE and persists thinking content, tokens, and signature', async () => {
+    const { db, insert } = configuredDb();
+    mocks.ensureDatabaseInitialized.mockResolvedValue(db);
+    mocks.toAIServiceConfig.mockImplementation((_provider, config, model, parameters) => ({
+      provider: 'openai',
+      apiKey: config.api_key,
+      baseUrl: config.base_url,
+      model,
+      enableThinking: parameters?.enableThinking,
+      reasoningEffort: parameters?.reasoningEffort
+    }));
+    mocks.streamChat.mockImplementation(async function* () {
+      yield {
+        content: '', done: false, model: 'model-default', provider: 'openai',
+        thinking: { content: 'because the user asked...', done: false }
+      };
+      yield {
+        content: '', done: false, model: 'model-default', provider: 'openai',
+        thinking: { content: '', done: true, tokens: 42, signature: 'sig-abc' }
+      };
+      yield { content: 'hello', done: false, model: 'model-default', provider: 'openai' };
+      yield { content: '', done: true, model: 'model-default', provider: 'openai' };
+    });
+    const capture = createResponse();
+
+    await rootPostHandler()(createRequest({
+      message: 'Question',
+      provider: 'openai',
+      parameters: { enableThinking: true, reasoningEffort: 'high' }
+    }), capture.response);
+
+    const payloads = ssePayloads(capture.writes);
+    const thinkingPayload = payloads.find(payload => (
+      payload !== '[DONE]' && typeof payload.thinking === 'object' && payload.thinking !== null
+    )) as Record<string, any> | undefined;
+    expect(thinkingPayload?.thinking?.content).toBe('because the user asked...');
+
+    expect(insert).toHaveBeenCalledOnce();
+    expect(insert).toHaveBeenCalledWith(expect.objectContaining({
+      has_thinking: true,
+      thinking_content: 'because the user asked...',
+      thinking_tokens: 42,
+      reasoning_effort: 'high',
+      thought_signature: 'sig-abc'
+    }));
+  });
+
   it('aborts the upstream stream and does not persist a partial assistant reply', async () => {
     const { db, insert } = configuredDb();
     mocks.ensureDatabaseInitialized.mockResolvedValue(db);

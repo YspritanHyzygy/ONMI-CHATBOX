@@ -23,6 +23,9 @@ interface AIParameters {
   presencePenalty?: number;
   repetitionPenalty?: number;
   useResponsesAPI?: boolean;
+  enableThinking?: boolean;
+  thinkingBudget?: number;
+  reasoningEffort?: 'minimal' | 'low' | 'medium' | 'high';
   researchTools?: {
     webSearch: boolean;
     codeInterpreter: boolean;
@@ -92,6 +95,9 @@ const DEFAULT_PARAMS: AIParameters = {
   presencePenalty: 0.0,
   repetitionPenalty: undefined,
   useResponsesAPI: false,
+  enableThinking: false,
+  thinkingBudget: undefined,
+  reasoningEffort: undefined,
   researchTools: { webSearch: true, codeInterpreter: true, fileSearch: true },
   background: true,
 };
@@ -101,6 +107,37 @@ const isResearchModel = (model?: string): boolean => {
   const m = model.toLowerCase();
   return m.includes('research') || m.includes('o3-deep-research') || m.includes('o4-mini-deep-research');
 };
+
+/** 该模型是否显示"扩展思考"区块（Ollama 模型动态获取，恒显示并加注释） */
+const supportsThinking = (provider?: string, model?: string): boolean => {
+  const m = (model || '').toLowerCase();
+  switch (provider) {
+    case 'claude':
+      return /claude-(3-7|[a-z]+-[45])/.test(m);
+    case 'gemini':
+      return /gemini-(2\.5|3)/.test(m);
+    case 'openai':
+      return /^(o[134]|gpt-5)/.test(m);
+    case 'xai':
+      return /grok-(3-mini|4)/.test(m);
+    case 'ollama':
+      return true;
+    default:
+      return false;
+  }
+};
+
+/** 思考控制形态：budget 滑杆（Claude）、effort 分档（OpenAI/Gemini 3/grok-3-mini）、仅开关（其余） */
+const thinkingControlKind = (provider?: string, model?: string): 'budget' | 'effort' | 'toggle' => {
+  const m = (model || '').toLowerCase();
+  if (provider === 'claude') return 'budget';
+  if (provider === 'openai') return 'effort';
+  if (provider === 'gemini' && /^gemini-3/.test(m)) return 'effort';
+  if (provider === 'xai' && /grok-3-mini/.test(m)) return 'effort';
+  return 'toggle';
+};
+
+const EFFORT_LEVELS: Array<'minimal' | 'low' | 'medium' | 'high'> = ['minimal', 'low', 'medium', 'high'];
 
 export default function AIParametersPanel({ onParametersChange, className = '', selectedModel }: AIParametersPanelProps) {
   const { t } = useTranslation();
@@ -217,7 +254,7 @@ export default function AIParametersPanel({ onParametersChange, className = '', 
     validateParameters(parameters);
   }, [currentLimits, validateParameters, parameters]);
 
-  const updateParameter = (key: keyof AIParameters, value: number | undefined | boolean | AIParameters['researchTools']) => {
+  const updateParameter = (key: keyof AIParameters, value: number | undefined | boolean | string | AIParameters['researchTools']) => {
     const newParams = { ...parameters, [key]: value };
     setParameters(newParams);
     validateParameters(newParams);
@@ -241,6 +278,9 @@ export default function AIParametersPanel({ onParametersChange, className = '', 
       presencePenalty: currentLimits.presencePenalty?.default || 0,
       repetitionPenalty: currentLimits.repetitionPenalty?.default,
       useResponsesAPI: false,
+      enableThinking: false,
+      thinkingBudget: undefined,
+      reasoningEffort: undefined,
       researchTools: { webSearch: true, codeInterpreter: true, fileSearch: true },
       background: isResearchModel(selectedModel?.model),
     };
@@ -431,6 +471,81 @@ export default function AIParametersPanel({ onParametersChange, className = '', 
                     checked={parameters.useResponsesAPI ?? false}
                     onCheckedChange={(checked) => updateParameter('useResponsesAPI', checked)}
                   />
+                </div>
+              </>
+            )}
+
+            {/* Extended thinking / reasoning chain */}
+            {supportsThinking(selectedModel?.provider, selectedModel?.model) && (
+              <>
+                <Separator />
+                <div>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm font-medium">{t('parameters.extendedThinking')}</p>
+                      <p className="text-xs text-muted-foreground">{t('parameters.extendedThinkingDesc')}</p>
+                    </div>
+                    <Switch
+                      checked={parameters.enableThinking ?? false}
+                      onCheckedChange={(checked) => updateParameter('enableThinking', checked)}
+                    />
+                  </div>
+
+                  {parameters.enableThinking && thinkingControlKind(selectedModel?.provider, selectedModel?.model) === 'budget' && (
+                    <div className="mt-3">
+                      <div className="flex items-center justify-between mb-2">
+                        <label className="text-sm font-medium">{t('parameters.thinkingBudget')}</label>
+                        <span className="text-xs tabular-nums px-1.5 py-0.5 rounded text-muted-foreground bg-muted">
+                          {(parameters.thinkingBudget && parameters.thinkingBudget > 0 ? parameters.thinkingBudget : 8192).toLocaleString()}
+                        </span>
+                      </div>
+                      <Slider
+                        min={1024}
+                        max={32768}
+                        step={1024}
+                        value={[parameters.thinkingBudget && parameters.thinkingBudget > 0 ? parameters.thinkingBudget : 8192]}
+                        onValueChange={([v]) => updateParameter('thinkingBudget', v)}
+                      />
+                      <div className="flex justify-between text-[10px] text-muted-foreground mt-1">
+                        <span>{t('parameters.short')} (1K)</span>
+                        <span>{t('parameters.long')} (32K)</span>
+                      </div>
+                    </div>
+                  )}
+
+                  {parameters.enableThinking && thinkingControlKind(selectedModel?.provider, selectedModel?.model) === 'effort' && (
+                    <div className="mt-3">
+                      <label className="text-sm font-medium mb-2 block">{t('parameters.reasoningEffort')}</label>
+                      <div className="grid grid-cols-4 gap-1">
+                        {EFFORT_LEVELS.map((level) => (
+                          <button
+                            key={level}
+                            type="button"
+                            className={cn(
+                              'text-xs rounded-md border px-1.5 py-1.5 transition-colors',
+                              (parameters.reasoningEffort ?? 'medium') === level
+                                ? 'border-primary bg-primary/10 text-primary font-medium'
+                                : 'border-border text-muted-foreground hover:bg-muted'
+                            )}
+                            onClick={() => updateParameter('reasoningEffort', level)}
+                          >
+                            {t(`parameters.effort${level.charAt(0).toUpperCase()}${level.slice(1)}`)}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {parameters.enableThinking && selectedModel?.provider === 'openai' && (
+                    <p className="text-xs text-muted-foreground mt-2 p-2 bg-muted rounded-md">
+                      {t('parameters.thinkingOpenAINote')}
+                    </p>
+                  )}
+                  {parameters.enableThinking && selectedModel?.provider === 'ollama' && (
+                    <p className="text-xs text-muted-foreground mt-2 p-2 bg-muted rounded-md">
+                      {t('parameters.thinkingOllamaNote')}
+                    </p>
+                  )}
                 </div>
               </>
             )}

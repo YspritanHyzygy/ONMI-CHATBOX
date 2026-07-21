@@ -35,6 +35,44 @@ export class GeminiAdapter implements AIServiceAdapter {
     return { baseUrl: normalized };
   }
 
+  /**
+   * 思维链配置。Gemini 3+ 用 thinkingLevel（与 thinkingBudget 互斥），
+   * 2.5 系列用 thinkingBudget（-1 动态 / 0 关闭 / 正整数上限）。
+   * 旧版 SDK 未给 thinkingConfig 定义类型，但会把 generationConfig 原样
+   * 序列化进 REST 请求，因此可以直接附加。
+   */
+  private applyThinkingConfig(generationConfig: any, config: AIServiceConfig): void {
+    if (!config.enableThinking) return;
+    const thinkingConfig: any = { includeThoughts: config.includeThoughts !== false };
+    if (/^gemini-3/.test(config.model)) {
+      const effort = config.reasoningEffort;
+      // pro 型号只接受 low/high；minimal 统一降为 low，medium 在 pro 上提为 high
+      const isPro = config.model.includes('pro');
+      let level: string = effort || 'high';
+      if (level === 'minimal') level = isPro ? 'low' : 'minimal';
+      if (level === 'medium' && isPro) level = 'high';
+      thinkingConfig.thinkingLevel = level;
+    } else {
+      thinkingConfig.thinkingBudget = config.thinkingBudget !== undefined ? config.thinkingBudget : -1;
+    }
+    generationConfig.thinkingConfig = thinkingConfig;
+  }
+
+  /** 将响应的 parts 按 thought 标志拆分为（思维，正文）两段文本 */
+  private splitParts(parts: any[] | undefined): { thought: string; text: string } {
+    let thought = '';
+    let text = '';
+    for (const part of parts || []) {
+      if (typeof part?.text !== 'string' || !part.text) continue;
+      if (part.thought === true) {
+        thought += part.text;
+      } else {
+        text += part.text;
+      }
+    }
+    return { thought, text };
+  }
+
   private convertMessages(messages: ChatMessage[]): { history: any[], systemInstruction?: string } {
     // Gemini使用不同的消息格式
     const history = [];
@@ -91,51 +129,50 @@ export class GeminiAdapter implements AIServiceAdapter {
         generationConfig.stopSequences = Array.isArray(config.stop) ? config.stop : [config.stop];
       }
 
+      this.applyThinkingConfig(generationConfig, config);
+
       const model = client.getGenerativeModel({
         model: config.model,
         systemInstruction: systemInstruction || undefined,
         generationConfig
       }, this.buildRequestOptions(config));
 
-      // 如果有历史记录，使用聊天会话
+      let response: any;
       if (history.length > 1) {
+        // 如果有历史记录，使用聊天会话
         const chat = model.startChat({
           history: history.slice(0, -1) // 除了最后一条消息
         });
-        
         const result = await chat.sendMessage(lastUserMessage.content, {
           signal: (config as AbortableConfig).signal
         });
-        const response = await result.response;
-        
-        return {
-          content: response.text(),
-          model: config.model,
-          provider: 'gemini',
-          usage: response.usageMetadata ? {
-            promptTokens: response.usageMetadata.promptTokenCount || 0,
-            completionTokens: response.usageMetadata.candidatesTokenCount || 0,
-            totalTokens: response.usageMetadata.totalTokenCount || 0
-          } : undefined
-        };
+        response = await result.response;
       } else {
         // 单次对话
         const result = await model.generateContent(lastUserMessage.content, {
           signal: (config as AbortableConfig).signal
         });
-        const response = await result.response;
-        
-        return {
-          content: response.text(),
-          model: config.model,
-          provider: 'gemini',
-          usage: response.usageMetadata ? {
-            promptTokens: response.usageMetadata.promptTokenCount || 0,
-            completionTokens: response.usageMetadata.candidatesTokenCount || 0,
-            totalTokens: response.usageMetadata.totalTokenCount || 0
-          } : undefined
-        };
+        response = await result.response;
       }
+
+      // 开启思维链时正文与思维混在 parts 里，需要拆分；未开启时沿用 text()
+      const { thought, text } = config.enableThinking
+        ? this.splitParts(response.candidates?.[0]?.content?.parts)
+        : { thought: '', text: response.text() };
+      const thoughtTokens = response.usageMetadata?.thoughtsTokenCount;
+
+      return {
+        content: text,
+        model: config.model,
+        provider: 'gemini',
+        thinking: thought ? { content: thought, tokens: thoughtTokens } : undefined,
+        usage: response.usageMetadata ? {
+          promptTokens: response.usageMetadata.promptTokenCount || 0,
+          completionTokens: response.usageMetadata.candidatesTokenCount || 0,
+          totalTokens: response.usageMetadata.totalTokenCount || 0,
+          reasoningTokens: thoughtTokens
+        } : undefined
+      };
     } catch (error: any) {
       throw new AIServiceError(
         error.message || 'Gemini API调用失败',
@@ -184,6 +221,8 @@ export class GeminiAdapter implements AIServiceAdapter {
         generationConfig.stopSequences = Array.isArray(config.stop) ? config.stop : [config.stop];
       }
 
+      this.applyThinkingConfig(generationConfig, config);
+
       const model = client.getGenerativeModel({
         model: config.model,
         systemInstruction: systemInstruction || undefined,
@@ -213,13 +252,37 @@ export class GeminiAdapter implements AIServiceAdapter {
       
       for await (const chunk of result.stream) {
         try {
-          const chunkText = chunk.text();
           chunkCount++;
-          
+          if (config.enableThinking) {
+            // 思维与正文混在 parts 中，逐块拆分并分别下发
+            const { thought, text } = this.splitParts((chunk as any).candidates?.[0]?.content?.parts);
+            const thoughtTokens = (chunk as any).usageMetadata?.thoughtsTokenCount;
+            if (thought) {
+              yield {
+                content: '',
+                done: false,
+                model: config.model,
+                provider: 'gemini',
+                thinking: { content: thought, done: false, tokens: thoughtTokens }
+              };
+            }
+            if (text) {
+              totalContent += text;
+              yield {
+                content: text,
+                done: false,
+                model: config.model,
+                provider: 'gemini'
+              };
+            }
+            continue;
+          }
+
+          const chunkText = chunk.text();
           if (chunkText) {
             totalContent += chunkText;
             console.log(`[Gemini] 收到第${chunkCount}个chunk，长度:${chunkText.length}`);
-            
+
             yield {
               content: chunkText,
               done: false,

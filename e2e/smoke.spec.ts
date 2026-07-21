@@ -221,6 +221,49 @@ test('creates the first session atomically through the mocked provider', async (
   ]);
 });
 
+test('streams and persists an extended-thinking chain through the mocked provider', async ({ page, request }) => {
+  const account = await createAccount(request, 'think');
+  await waitForMockOllama(request);
+  await configureMockOllama(request, account);
+  await authenticatePage(page, account);
+
+  await page.goto('/chat');
+
+  await page.getByRole('button', { name: 'Parameters' }).click();
+  const thinkingRow = page
+    .locator('div.flex.items-center.justify-between')
+    .filter({ has: page.getByText('Extended thinking', { exact: true }) });
+  await thinkingRow.getByRole('switch').click();
+  await page.keyboard.press('Escape');
+
+  const composer = page.getByRole('textbox', { name: 'Chat message' });
+  await composer.fill('Why is the sky blue?');
+  await page.getByRole('button', { name: 'Send' }).click();
+
+  await expect(page.getByText('Mock ONMI response', { exact: true })).toBeVisible();
+  await expect(page.getByText('Thinking', { exact: true })).toBeVisible();
+
+  // Expand the thinking section and verify the trace renders.
+  await page.getByText('Thinking', { exact: true }).click();
+  await expect(page.getByText('Mock reasoning trace')).toBeVisible();
+
+  // The chain must be persisted with the assistant message.
+  const conversationId = new URL(page.url()).searchParams.get('conversation');
+  expect(conversationId).toBeTruthy();
+  const messages = await request.get(
+    `/api/chat/conversations/${encodeURIComponent(conversationId!)}/messages`,
+    { headers: { Authorization: `Bearer ${account.token}` } },
+  );
+  const payload = await messages.json() as {
+    success?: boolean;
+    data?: Array<{ role?: string; has_thinking?: boolean; thinking_content?: string }>;
+  };
+  expect(payload.success).toBe(true);
+  const assistant = payload.data?.find((message) => message.role === 'assistant');
+  expect(assistant?.has_thinking).toBe(true);
+  expect(assistant?.thinking_content).toBe('Mock reasoning trace');
+});
+
 test('loads a deep link and manages sidebar sessions without a real provider call', async ({ page, request }) => {
   const account = await createAccount(request, 'chat');
   await waitForMockOllama(request);

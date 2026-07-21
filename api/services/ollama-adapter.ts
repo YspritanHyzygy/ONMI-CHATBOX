@@ -13,10 +13,58 @@ type AbortableConfig = AIServiceConfig & { signal?: AbortSignal };
 
 interface OllamaChatChunk {
   model?: string;
-  message?: { content?: string };
+  message?: { content?: string; thinking?: string };
   done?: boolean;
   prompt_eval_count?: number;
   eval_count?: number;
+}
+
+/**
+ * 兜底解析器：部分推理模型（如早期 deepseek-r1 tag 版本）不走 Ollama 的原生
+ * thinking 通道，而是把 <think>...</think> 直接混在 content 里。该状态机能
+ * 处理标签被流式切碎的情况（如一个 chunk 结尾是 "<thi"）。
+ */
+class ThinkTagParser {
+  private inside = false;
+  private pending = '';
+
+  private static longestPartialSuffix(text: string, tag: string): number {
+    const max = Math.min(text.length, tag.length - 1);
+    for (let len = max; len > 0; len--) {
+      if (text.endsWith(tag.slice(0, len))) return len;
+    }
+    return 0;
+  }
+
+  feed(text: string): { thought: string; content: string } {
+    this.pending += text;
+    let thought = '';
+    let content = '';
+    for (;;) {
+      const tag = this.inside ? '</think>' : '<think>';
+      const idx = this.pending.indexOf(tag);
+      if (idx === -1) {
+        const keep = ThinkTagParser.longestPartialSuffix(this.pending, tag);
+        const emit = this.pending.slice(0, this.pending.length - keep);
+        this.pending = this.pending.slice(this.pending.length - keep);
+        if (this.inside) thought += emit;
+        else content += emit;
+        break;
+      }
+      const before = this.pending.slice(0, idx);
+      if (this.inside) thought += before;
+      else content += before;
+      this.pending = this.pending.slice(idx + tag.length);
+      this.inside = !this.inside;
+    }
+    return { thought, content };
+  }
+
+  flush(): { thought: string; content: string } {
+    const rest = this.pending;
+    this.pending = '';
+    return this.inside ? { thought: rest, content: '' } : { thought: '', content: rest };
+  }
 }
 
 export class OllamaAdapter implements AIServiceAdapter {
@@ -39,30 +87,71 @@ export class OllamaAdapter implements AIServiceAdapter {
     };
   }
 
-  private buildRequest(messages: ChatMessage[], config: AIServiceConfig, stream: boolean) {
+  private buildRequest(
+    messages: ChatMessage[],
+    config: AIServiceConfig,
+    stream: boolean,
+    options?: { omitThink?: boolean }
+  ) {
     return {
       model: config.model,
       messages: messages.map(message => ({ role: message.role, content: message.content })),
       stream,
+      ...(config.enableThinking && !options?.omitThink ? { think: true } : {}),
       options: this.buildOptions(config)
     };
   }
 
-  async chat(messages: ChatMessage[], config: AIServiceConfig): Promise<AIResponse> {
-    try {
-      const response = await fetch(buildServiceUrl('ollama', 'chat', this.getBaseUrl(config)), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(this.buildRequest(messages, config, false)),
-        signal: (config as AbortableConfig).signal
-      });
+  /**
+   * 发起 chat 请求。模型不支持 think 参数时 Ollama 会直接报错，
+   * 此时去掉 think 重试一次（<think> 标签兜底解析仍然生效）。
+   */
+  private async requestChat(
+    messages: ChatMessage[],
+    config: AIServiceConfig,
+    stream: boolean
+  ): Promise<globalThis.Response> {
+    const signal = (config as AbortableConfig).signal;
+    const url = buildServiceUrl('ollama', 'chat', this.getBaseUrl(config));
+    const send = (omitThink: boolean) => fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(this.buildRequest(messages, config, stream, { omitThink })),
+      signal
+    });
 
-      if (!response.ok) {
+    let response = await send(false);
+    if (!response.ok && config.enableThinking) {
+      const errorText = await response.text().catch(() => '');
+      if (/think/i.test(errorText)) {
+        response = await send(true);
+      } else {
         throw new AIServiceError(`Ollama request failed with HTTP ${response.status}`, 'ollama', response.status);
       }
+    }
+    if (!response.ok) {
+      throw new AIServiceError(`Ollama request failed with HTTP ${response.status}`, 'ollama', response.status);
+    }
+    return response;
+  }
+
+  async chat(messages: ChatMessage[], config: AIServiceConfig): Promise<AIResponse> {
+    try {
+      const response = await this.requestChat(messages, config, false);
 
       const data = await response.json() as OllamaChatChunk;
-      const content = data.message?.content;
+      let content = data.message?.content ?? '';
+      let thinking = data.message?.thinking ?? '';
+
+      // 兜底：模型把 <think> 混进 content 时拆出来
+      if (config.enableThinking && !thinking && content.includes('<think>')) {
+        const parser = new ThinkTagParser();
+        const fed = parser.feed(content);
+        const rest = parser.flush();
+        thinking = fed.thought + rest.thought;
+        content = fed.content + rest.content;
+      }
+
       if (!content) {
         throw new AIServiceError('Ollama returned an empty response', 'ollama');
       }
@@ -73,6 +162,7 @@ export class OllamaAdapter implements AIServiceAdapter {
         content,
         model: data.model || config.model,
         provider: 'ollama',
+        thinking: thinking ? { content: thinking } : undefined,
         usage: {
           promptTokens,
           completionTokens,
@@ -91,16 +181,7 @@ export class OllamaAdapter implements AIServiceAdapter {
     let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
 
     try {
-      const response = await fetch(buildServiceUrl('ollama', 'chat', this.getBaseUrl(config)), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(this.buildRequest(messages, config, true)),
-        signal
-      });
-
-      if (!response.ok) {
-        throw new AIServiceError(`Ollama request failed with HTTP ${response.status}`, 'ollama', response.status);
-      }
+      const response = await this.requestChat(messages, config, true);
       if (!response.body) {
         throw new AIServiceError('Ollama returned an empty stream', 'ollama');
       }
@@ -109,10 +190,61 @@ export class OllamaAdapter implements AIServiceAdapter {
       const decoder = new TextDecoder();
       let buffer = '';
       let completed = false;
+      const tagParser = config.enableThinking ? new ThinkTagParser() : null;
 
       const consumeLine = (line: string): OllamaChatChunk | undefined => {
         const trimmed = line.trim();
         return trimmed ? JSON.parse(trimmed) as OllamaChatChunk : undefined;
+      };
+
+      // 把一个 NDJSON 块转成待下发的流式响应（原生 thinking 通道 + 标签兜底）
+      const expandChunk = (chunk: OllamaChatChunk): StreamResponse[] => {
+        const out: StreamResponse[] = [];
+        const model = chunk.model || config.model;
+        if (chunk.message?.thinking) {
+          out.push({
+            content: '',
+            done: false,
+            model,
+            provider: 'ollama',
+            thinking: { content: chunk.message.thinking, done: false }
+          });
+        }
+        const rawContent = chunk.message?.content || '';
+        if (rawContent) {
+          const { thought, content } = tagParser
+            ? tagParser.feed(rawContent)
+            : { thought: '', content: rawContent };
+          if (thought) {
+            out.push({
+              content: '',
+              done: false,
+              model,
+              provider: 'ollama',
+              thinking: { content: thought, done: false }
+            });
+          }
+          if (content) {
+            out.push({ content, done: false, model, provider: 'ollama' });
+          }
+        }
+        if (chunk.done) {
+          const rest = tagParser?.flush();
+          if (rest?.thought) {
+            out.push({
+              content: '',
+              done: false,
+              model,
+              provider: 'ollama',
+              thinking: { content: rest.thought, done: true }
+            });
+          }
+          if (rest?.content) {
+            out.push({ content: rest.content, done: false, model, provider: 'ollama' });
+          }
+          out.push({ content: '', done: true, model, provider: 'ollama' });
+        }
+        return out;
       };
 
       while (!completed) {
@@ -131,24 +263,9 @@ export class OllamaAdapter implements AIServiceAdapter {
         for (const line of lines) {
           const chunk = consumeLine(line);
           if (!chunk) continue;
-
-          if (chunk.message?.content) {
-            yield {
-              content: chunk.message.content,
-              done: false,
-              model: chunk.model || config.model,
-              provider: 'ollama'
-            };
-          }
-
+          for (const item of expandChunk(chunk)) yield item;
           if (chunk.done) {
             completed = true;
-            yield {
-              content: '',
-              done: true,
-              model: chunk.model || config.model,
-              provider: 'ollama'
-            };
             break;
           }
         }
@@ -156,22 +273,9 @@ export class OllamaAdapter implements AIServiceAdapter {
         if (done) {
           if (buffer.trim()) {
             const chunk = consumeLine(buffer);
-            if (chunk?.message?.content) {
-              yield {
-                content: chunk.message.content,
-                done: false,
-                model: chunk.model || config.model,
-                provider: 'ollama'
-              };
-            }
-            if (chunk?.done) {
-              completed = true;
-              yield {
-                content: '',
-                done: true,
-                model: chunk.model || config.model,
-                provider: 'ollama'
-              };
+            if (chunk) {
+              for (const item of expandChunk(chunk)) yield item;
+              if (chunk.done) completed = true;
             }
           }
           buffer = '';

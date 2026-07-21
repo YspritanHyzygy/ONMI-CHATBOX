@@ -311,6 +311,8 @@ async function handleChatRequest(
     if (streamRequested && providerCanStream) {
       let content = '';
       let thinkingContent = '';
+      let thinkingTokens: number | undefined;
+      let thinkingSignature: string | undefined;
       let completed = false;
       let responseModel = finalModel;
 
@@ -320,6 +322,8 @@ async function handleChatRequest(
         }
         content += chunk.content || '';
         thinkingContent += chunk.thinking?.content || '';
+        if (chunk.thinking?.tokens !== undefined) thinkingTokens = chunk.thinking.tokens;
+        if (chunk.thinking?.signature) thinkingSignature = chunk.thinking.signature;
         responseModel = chunk.model || responseModel;
         if (chunk.done) {
           if (chunk.content || chunk.thinking?.content) {
@@ -340,7 +344,12 @@ async function handleChatRequest(
         content,
         provider: actualProvider,
         model: finalModel,
-        thinking: { content: thinkingContent || undefined }
+        thinking: {
+          content: thinkingContent || undefined,
+          tokens: thinkingTokens,
+          effort: aiConfig.enableThinking ? aiConfig.reasoningEffort : undefined,
+          signature: thinkingSignature
+        }
       });
       writeSse(res, {
         content: '',

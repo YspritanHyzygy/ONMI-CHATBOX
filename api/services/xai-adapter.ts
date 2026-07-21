@@ -24,6 +24,20 @@ export class XAIAdapter implements AIServiceAdapter {
     });
   }
 
+  /**
+   * Grok 推理控制：reasoning_effort 仅 grok-3-mini 等可调推理模型接受
+   * （low/high）；grok-4 及以上恒定推理、传参会报错，因此只对可调模型下发。
+   * 推理内容通过响应的 reasoning_content 字段返回，无需请求参数。
+   */
+  private applyThinkingParams(requestParams: any, config: AIServiceConfig): void {
+    if (!config.enableThinking || !config.reasoningEffort) return;
+    if (!/grok-3-mini/.test(config.model)) return;
+    requestParams.reasoning_effort =
+      config.reasoningEffort === 'minimal' || config.reasoningEffort === 'medium'
+        ? (config.reasoningEffort === 'minimal' ? 'low' : 'high')
+        : config.reasoningEffort;
+  }
+
   async chat(messages: ChatMessage[], config: AIServiceConfig): Promise<AIResponse> {
     try {
       const client = this.createClient(config);
@@ -53,6 +67,8 @@ export class XAIAdapter implements AIServiceAdapter {
         requestParams.stop = config.stop;
       }
 
+      this.applyThinkingParams(requestParams, config);
+
       const response = await client.chat.completions.create(requestParams, {
         signal: (config as AbortableConfig).signal
       });
@@ -62,14 +78,19 @@ export class XAIAdapter implements AIServiceAdapter {
         throw new AIServiceError('No response content', 'xai');
       }
 
+      const reasoningContent = (choice.message as any).reasoning_content;
+      const reasoningTokens = (response.usage as any)?.completion_tokens_details?.reasoning_tokens;
+
       return {
         content: choice.message.content,
         model: response.model,
         provider: 'xai',
+        thinking: reasoningContent ? { content: reasoningContent, tokens: reasoningTokens } : undefined,
         usage: response.usage ? {
           promptTokens: response.usage.prompt_tokens,
           completionTokens: response.usage.completion_tokens,
-          totalTokens: response.usage.total_tokens
+          totalTokens: response.usage.total_tokens,
+          reasoningTokens
         } : undefined
       };
     } catch (error: any) {
@@ -111,12 +132,23 @@ export class XAIAdapter implements AIServiceAdapter {
         streamParams.stop = config.stop;
       }
 
+      this.applyThinkingParams(streamParams, config);
+
       const stream = await client.chat.completions.create(streamParams, {
         signal: (config as AbortableConfig).signal
       });
 
       for await (const chunk of stream as any) {
         const choice = chunk.choices[0];
+        if (choice?.delta?.reasoning_content) {
+          yield {
+            content: '',
+            done: false,
+            model: chunk.model,
+            provider: 'xai',
+            thinking: { content: choice.delta.reasoning_content, done: false }
+          };
+        }
         if (choice?.delta?.content) {
           yield {
             content: choice.delta.content,

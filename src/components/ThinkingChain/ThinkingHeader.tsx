@@ -1,6 +1,7 @@
 import React from 'react';
 import { ChevronRight } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
+import { useOnmiCopy } from '@/components/onmi/useOnmiCopy';
 
 interface ThinkingHeaderProps {
   isExpanded: boolean;
@@ -19,6 +20,7 @@ export const ThinkingHeader: React.FC<ThinkingHeaderProps> = ({
   effort,
   className = ''
 }) => {
+  const t = useOnmiCopy();
   return (
     <div
       className={`flex items-center justify-between px-3 py-2 bg-muted/50 border-b border-border cursor-pointer hover:bg-muted transition-colors ${className}`}
@@ -27,7 +29,7 @@ export const ThinkingHeader: React.FC<ThinkingHeaderProps> = ({
       <div className="flex items-center gap-2">
         <ChevronRight className={`h-3.5 w-3.5 text-muted-foreground transition-transform duration-200 ${isExpanded ? 'rotate-90' : ''}`} />
         <span className="font-medium text-foreground text-xs flex items-center gap-2">
-          Thinking
+          {t('思考过程', 'Thinking')}
           {isStreaming && (
             <span className="animate-pulse text-primary text-[10px]">●</span>
           )}
@@ -41,7 +43,7 @@ export const ThinkingHeader: React.FC<ThinkingHeaderProps> = ({
           </Badge>
         )}
         {tokens !== undefined && tokens > 0 && (
-          <span className="text-[10px] text-muted-foreground">{tokens} tokens</span>
+          <span className="text-[10px] text-muted-foreground">{tokens} {t('思维 token', 'tokens')}</span>
         )}
       </div>
     </div>

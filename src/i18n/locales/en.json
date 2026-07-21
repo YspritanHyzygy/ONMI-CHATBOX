@@ -264,7 +264,17 @@
     "fileSearchDesc": "Search and analyze documents",
     "backgroundMode": "Background Mode",
     "backgroundModeDesc": "For long-running research tasks",
-    "researchTip": "Tip: Enable all tools for best research results"
+    "researchTip": "Tip: Enable all tools for best research results",
+    "extendedThinking": "Extended thinking",
+    "extendedThinkingDesc": "Reason step-by-step before answering; the thinking chain shows in the reply",
+    "thinkingBudget": "Thinking budget",
+    "reasoningEffort": "Reasoning effort",
+    "effortMinimal": "Minimal",
+    "effortLow": "Low",
+    "effortMedium": "Medium",
+    "effortHigh": "High",
+    "thinkingOpenAINote": "OpenAI applies the reasoning effort but this API does not expose the chain itself",
+    "thinkingOllamaNote": "Reasoning models only (deepseek-r1, qwen3, gpt-oss…); other models ignore it gracefully"
   },
   "time": {
     "minutesAgo": "{{count}} minutes ago",

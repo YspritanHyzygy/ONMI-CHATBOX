@@ -266,7 +266,17 @@
     "fileSearchDesc": "搜索和分析文档",
     "backgroundMode": "后台模式",
     "backgroundModeDesc": "用于长时间研究任务",
-    "researchTip": "提示：Research 模型推荐启用所有工具以获得最佳研究效果"
+    "researchTip": "提示：Research 模型推荐启用所有工具以获得最佳研究效果",
+    "extendedThinking": "扩展思考",
+    "extendedThinkingDesc": "回答前逐步推理，思维过程会显示在回复中",
+    "thinkingBudget": "思维预算",
+    "reasoningEffort": "推理力度",
+    "effortMinimal": "最省",
+    "effortLow": "低",
+    "effortMedium": "中",
+    "effortHigh": "高",
+    "thinkingOpenAINote": "OpenAI 会应用推理力度提升回答质量，但此 API 不返回思维过程内容",
+    "thinkingOllamaNote": "仅推理模型支持（deepseek-r1、qwen3、gpt-oss 等）；不支持的模型会自动忽略"
   },
   "time": {
     "minutesAgo": "{{count}}分钟前",

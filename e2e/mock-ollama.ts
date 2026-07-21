@@ -32,8 +32,12 @@ const server = createServer(async (request, response) => {
       }
 
       const content = 'Mock ONMI response';
+      const withThinking = body.think === true;
       if (body.stream === true) {
         response.writeHead(200, { 'Content-Type': 'application/x-ndjson' });
+        if (withThinking) {
+          response.write(`${JSON.stringify({ model, message: { role: 'assistant', thinking: 'Mock reasoning trace' }, done: false })}\n`);
+        }
         response.write(`${JSON.stringify({ model, message: { role: 'assistant', content }, done: false })}\n`);
         // Intentionally omit the final newline to exercise the stream parser's
         // valid unterminated-final-record behavior.
@@ -49,7 +53,11 @@ const server = createServer(async (request, response) => {
 
       writeJson(response, {
         model,
-        message: { role: 'assistant', content },
+        message: {
+          role: 'assistant',
+          content,
+          ...(withThinking ? { thinking: 'Mock reasoning trace' } : {})
+        },
         done: true,
         prompt_eval_count: 4,
         eval_count: 3

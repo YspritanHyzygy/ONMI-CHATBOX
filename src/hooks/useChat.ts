@@ -48,6 +48,12 @@ export interface AIParameters {
   maxTokens?: number;
   topP: number;
   useResponsesAPI?: boolean;
+  /** 扩展思考（thinking/reasoning）开关；随 parameters 原样发给后端 */
+  enableThinking?: boolean;
+  /** 思维预算 token 数（Claude/Gemini 2.5；-1 表示动态） */
+  thinkingBudget?: number;
+  /** 推理努力程度（OpenAI/xAI/Gemini 3） */
+  reasoningEffort?: 'minimal' | 'low' | 'medium' | 'high';
   researchTools?: {
     webSearch: boolean;
     codeInterpreter: boolean;
