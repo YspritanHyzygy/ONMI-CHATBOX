@@ -27,9 +27,11 @@ export class OllamaAdapter implements AIServiceAdapter {
   }
 
   private buildOptions(config: AIServiceConfig) {
+    const numPredict = config.numPredict ?? config.maxTokens;
     return {
       temperature: config.temperature ?? 0.7,
-      num_predict: config.numPredict ?? config.maxTokens ?? 2000,
+      // 用户未设置时不传，交给模型自身上限，避免静默截断
+      ...(numPredict !== undefined ? { num_predict: numPredict } : {}),
       ...(config.topP !== undefined ? { top_p: config.topP } : {}),
       ...(config.numCtx !== undefined ? { num_ctx: config.numCtx } : {}),
       ...(config.repeatPenalty !== undefined ? { repeat_penalty: config.repeatPenalty } : {}),

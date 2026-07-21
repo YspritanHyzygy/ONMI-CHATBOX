@@ -1,0 +1,114 @@
+{
+  "qwen3": {
+    "modelId": "qwen3",
+    "provider": "ollama",
+    "displayName": "Qwen 3",
+    "description": "Alibaba's open-weight generation with hybrid thinking mode",
+    "limits": {
+      "temperature": { "min": 0, "max": 2, "default": 0.7, "step": 0.1 },
+      "maxTokens": { "min": 1, "max": 32768, "default": 4096 },
+      "topP": { "min": 0, "max": 1, "default": 0.9, "step": 0.05 },
+      "numPredict": { "min": -1, "max": 32768, "default": 4096 },
+      "numCtx": { "min": 512, "max": 262144, "default": 8192 },
+      "repeatPenalty": { "min": 0.5, "max": 2, "default": 1.1, "step": 0.05 }
+    },
+    "capabilities": {
+      "supportsStreaming": true,
+      "supportsImages": false,
+      "supportsTools": true,
+      "supportsSystemPrompt": true,
+      "maxInputTokens": 262144,
+      "maxOutputTokens": 32768
+    },
+    "metadata": {
+      "version": "1.0.0",
+      "lastUpdated": "2026-07-21T00:00:00.000Z",
+      "source": "static",
+      "tags": ["thinking", "local"]
+    }
+  },
+  "deepseek-r1": {
+    "modelId": "deepseek-r1",
+    "provider": "ollama",
+    "displayName": "DeepSeek R1",
+    "description": "Reasoning model that thinks step by step before answering",
+    "limits": {
+      "temperature": { "min": 0, "max": 2, "default": 0.6, "step": 0.1 },
+      "maxTokens": { "min": 1, "max": 32768, "default": 4096 },
+      "topP": { "min": 0, "max": 1, "default": 0.95, "step": 0.05 },
+      "numPredict": { "min": -1, "max": 32768, "default": 4096 },
+      "numCtx": { "min": 512, "max": 131072, "default": 8192 },
+      "repeatPenalty": { "min": 0.5, "max": 2, "default": 1.1, "step": 0.05 }
+    },
+    "capabilities": {
+      "supportsStreaming": true,
+      "supportsImages": false,
+      "supportsTools": false,
+      "supportsSystemPrompt": true,
+      "maxInputTokens": 131072,
+      "maxOutputTokens": 32768
+    },
+    "metadata": {
+      "version": "1.0.0",
+      "lastUpdated": "2026-07-21T00:00:00.000Z",
+      "source": "static",
+      "tags": ["thinking", "local"]
+    }
+  },
+  "llama3.3": {
+    "modelId": "llama3.3",
+    "provider": "ollama",
+    "displayName": "Llama 3.3",
+    "description": "Meta's workhorse model for general chat and RAG",
+    "limits": {
+      "temperature": { "min": 0, "max": 2, "default": 0.7, "step": 0.1 },
+      "maxTokens": { "min": 1, "max": 8192, "default": 4096 },
+      "topP": { "min": 0, "max": 1, "default": 0.9, "step": 0.05 },
+      "numPredict": { "min": -1, "max": 8192, "default": 4096 },
+      "numCtx": { "min": 512, "max": 131072, "default": 8192 },
+      "repeatPenalty": { "min": 0.5, "max": 2, "default": 1.1, "step": 0.05 }
+    },
+    "capabilities": {
+      "supportsStreaming": true,
+      "supportsImages": false,
+      "supportsTools": true,
+      "supportsSystemPrompt": true,
+      "maxInputTokens": 131072,
+      "maxOutputTokens": 8192
+    },
+    "metadata": {
+      "version": "1.0.0",
+      "lastUpdated": "2026-07-21T00:00:00.000Z",
+      "source": "static",
+      "tags": ["local"]
+    }
+  },
+  "gpt-oss": {
+    "modelId": "gpt-oss",
+    "provider": "ollama",
+    "displayName": "GPT-OSS",
+    "description": "OpenAI's open-weight model with 128K context",
+    "limits": {
+      "temperature": { "min": 0, "max": 2, "default": 0.7, "step": 0.1 },
+      "maxTokens": { "min": 1, "max": 32768, "default": 4096 },
+      "topP": { "min": 0, "max": 1, "default": 1, "step": 0.05 },
+      "numPredict": { "min": -1, "max": 32768, "default": 4096 },
+      "numCtx": { "min": 512, "max": 131072, "default": 8192 },
+      "repeatPenalty": { "min": 0.5, "max": 2, "default": 1.1, "step": 0.05 }
+    },
+    "capabilities": {
+      "supportsStreaming": true,
+      "supportsImages": false,
+      "supportsTools": true,
+      "supportsSystemPrompt": true,
+      "maxInputTokens": 131072,
+      "maxOutputTokens": 32768
+    },
+    "metadata": {
+      "version": "1.0.0",
+      "lastUpdated": "2026-07-21T00:00:00.000Z",
+      "source": "static",
+      "tags": ["thinking", "local"]
+    }
+  }
+}

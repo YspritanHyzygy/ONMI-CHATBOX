@@ -35,7 +35,8 @@ export class XAIAdapter implements AIServiceAdapter {
           content: msg.content
         })),
         temperature: config.temperature ?? 0.7,
-        max_tokens: config.maxTokens || 2000
+        // 用户未设置时不传，交给模型自身上限，避免静默截断
+        ...(config.maxTokens ? { max_tokens: config.maxTokens } : {})
       };
 
       // 添加其他支持的参数
@@ -92,7 +93,7 @@ export class XAIAdapter implements AIServiceAdapter {
           content: msg.content
         })),
         temperature: config.temperature ?? 0.7,
-        max_tokens: config.maxTokens || 2000,
+        ...(config.maxTokens ? { max_tokens: config.maxTokens } : {}),
         stream: true
       };
 

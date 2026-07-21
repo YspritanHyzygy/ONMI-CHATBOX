@@ -1,0 +1,106 @@
+{
+  "gemini-3.5-flash": {
+    "modelId": "gemini-3.5-flash",
+    "provider": "gemini",
+    "displayName": "Gemini 3.5 Flash",
+    "description": "Google's latest generally-available Gemini model (2026)",
+    "limits": {
+      "temperature": { "min": 0, "max": 2, "default": 0.7, "step": 0.1 },
+      "maxTokens": { "min": 1, "max": 65536, "default": 8192 },
+      "topP": { "min": 0, "max": 1, "default": 0.95, "step": 0.05 },
+      "topK": { "min": 1, "max": 64, "default": 40 }
+    },
+    "capabilities": {
+      "supportsStreaming": true,
+      "supportsImages": true,
+      "supportsTools": true,
+      "supportsSystemPrompt": true,
+      "maxInputTokens": 1048576,
+      "maxOutputTokens": 65536
+    },
+    "metadata": {
+      "version": "1.0.0",
+      "lastUpdated": "2026-07-21T00:00:00.000Z",
+      "source": "static",
+      "tags": ["flagship", "thinking"]
+    }
+  },
+  "gemini-3.1-pro": {
+    "modelId": "gemini-3.1-pro",
+    "provider": "gemini",
+    "displayName": "Gemini 3.1 Pro",
+    "description": "Google's pro-tier Gemini model (preview)",
+    "limits": {
+      "temperature": { "min": 0, "max": 2, "default": 0.7, "step": 0.1 },
+      "maxTokens": { "min": 1, "max": 65536, "default": 8192 },
+      "topP": { "min": 0, "max": 1, "default": 0.95, "step": 0.05 },
+      "topK": { "min": 1, "max": 64, "default": 40 }
+    },
+    "capabilities": {
+      "supportsStreaming": true,
+      "supportsImages": true,
+      "supportsTools": true,
+      "supportsSystemPrompt": true,
+      "maxInputTokens": 1048576,
+      "maxOutputTokens": 65536
+    },
+    "metadata": {
+      "version": "1.0.0",
+      "lastUpdated": "2026-07-21T00:00:00.000Z",
+      "source": "static",
+      "tags": ["preview", "thinking"]
+    }
+  },
+  "gemini-2.5-pro": {
+    "modelId": "gemini-2.5-pro",
+    "provider": "gemini",
+    "displayName": "Gemini 2.5 Pro",
+    "description": "Gemini 2.5 generation pro model with thinking support",
+    "limits": {
+      "temperature": { "min": 0, "max": 2, "default": 0.7, "step": 0.1 },
+      "maxTokens": { "min": 1, "max": 65536, "default": 8192 },
+      "topP": { "min": 0, "max": 1, "default": 0.95, "step": 0.05 },
+      "topK": { "min": 1, "max": 64, "default": 40 }
+    },
+    "capabilities": {
+      "supportsStreaming": true,
+      "supportsImages": true,
+      "supportsTools": true,
+      "supportsSystemPrompt": true,
+      "maxInputTokens": 1048576,
+      "maxOutputTokens": 65536
+    },
+    "metadata": {
+      "version": "1.0.0",
+      "lastUpdated": "2026-07-21T00:00:00.000Z",
+      "source": "static",
+      "tags": ["thinking"]
+    }
+  },
+  "gemini-2.5-flash": {
+    "modelId": "gemini-2.5-flash",
+    "provider": "gemini",
+    "displayName": "Gemini 2.5 Flash",
+    "description": "Fast Gemini 2.5 generation model with thinking support",
+    "limits": {
+      "temperature": { "min": 0, "max": 2, "default": 0.7, "step": 0.1 },
+      "maxTokens": { "min": 1, "max": 65536, "default": 8192 },
+      "topP": { "min": 0, "max": 1, "default": 0.95, "step": 0.05 },
+      "topK": { "min": 1, "max": 64, "default": 40 }
+    },
+    "capabilities": {
+      "supportsStreaming": true,
+      "supportsImages": true,
+      "supportsTools": true,
+      "supportsSystemPrompt": true,
+      "maxInputTokens": 1048576,
+      "maxOutputTokens": 65536
+    },
+    "metadata": {
+      "version": "1.0.0",
+      "lastUpdated": "2026-07-21T00:00:00.000Z",
+      "source": "static",
+      "tags": ["fast", "thinking"]
+    }
+  }
+}

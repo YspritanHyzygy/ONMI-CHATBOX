@@ -36,7 +36,8 @@ export class OpenAIAdapter implements AIServiceAdapter {
           role: msg.role,
           content: msg.content
         })),
-        max_completion_tokens: config.maxTokens || 2000
+        // 用户未设置时不传，交给模型自身上限，避免静默截断
+        ...(config.maxTokens ? { max_completion_tokens: config.maxTokens } : {})
       };
 
       // 默认添加 temperature 参数
@@ -96,7 +97,7 @@ export class OpenAIAdapter implements AIServiceAdapter {
           role: msg.role,
           content: msg.content
         })),
-        max_completion_tokens: config.maxTokens || 2000,
+        ...(config.maxTokens ? { max_completion_tokens: config.maxTokens } : {}),
         stream: true
       };
 

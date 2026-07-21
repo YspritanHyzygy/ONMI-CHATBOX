@@ -24,7 +24,8 @@ build
 .env.bak
 
 # Local data storage (Contains chat history and user data)
-data/
+# Root-anchored: a bare "data/" would also swallow src/lib/model-parameters/data/
+/data/
 *.json.backup
 *.json.bak
 database.json

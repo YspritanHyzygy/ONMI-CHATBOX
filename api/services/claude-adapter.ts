@@ -43,7 +43,8 @@ export class ClaudeAdapter implements AIServiceAdapter {
         model: config.model,
         messages: convertedMessages,
         system: system || undefined,
-        max_tokens: config.maxTokens || 2000,
+        // Anthropic API 强制要求 max_tokens；未设置时用 4096（所有在售 Claude 模型均支持）
+        max_tokens: config.maxTokens ?? 4096,
         temperature: config.temperature ?? 0.7
       };
 
@@ -61,13 +62,16 @@ export class ClaudeAdapter implements AIServiceAdapter {
         signal: (config as AbortableConfig).signal
       });
 
-      const content = response.content[0];
-      if (content.type !== 'text') {
-        throw new AIServiceError('Unexpected response type', 'claude');
+      // content 数组可能为空，或以非 text 块开头（如 thinking 块）——找第一个 text 块
+      const textBlock = response.content.find(
+        (block): block is Anthropic.TextBlock => block.type === 'text'
+      );
+      if (!textBlock) {
+        throw new AIServiceError('Claude returned no text content', 'claude');
       }
 
       return {
-        content: content.text,
+        content: textBlock.text,
         model: response.model,
         provider: 'claude',
         usage: response.usage ? {
@@ -95,7 +99,7 @@ export class ClaudeAdapter implements AIServiceAdapter {
         model: config.model,
         messages: convertedMessages,
         system: system || undefined,
-        max_tokens: config.maxTokens || 2000,
+        max_tokens: config.maxTokens ?? 4096,
         temperature: config.temperature ?? 0.7,
         stream: true
       };

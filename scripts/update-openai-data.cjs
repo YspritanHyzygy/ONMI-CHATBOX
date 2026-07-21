@@ -448,6 +448,7 @@ class OpenAIDataUpdater {
   saveModelData(modelData) {
     try {
       const jsonContent = JSON.stringify(modelData, null, 2);
+      fs.mkdirSync(path.dirname(CONFIG.outputPath), { recursive: true });
       fs.writeFileSync(CONFIG.outputPath, jsonContent, 'utf8');
       
       console.log(`✅ OpenAI模型数据已保存: ${CONFIG.outputPath}`);

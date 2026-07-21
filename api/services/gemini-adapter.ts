@@ -22,6 +22,19 @@ export class GeminiAdapter implements AIServiceAdapter {
     return new GoogleGenerativeAI(config.apiKey);
   }
 
+  /**
+   * 让 chat/stream 与模型列表一致地尊重用户自定义 baseUrl（代理/中转场景）。
+   * SDK 会自行追加 /v1beta 版本路径，所以这里归一化为服务器根地址；
+   * 官方默认地址返回 undefined，走 SDK 内置端点。
+   */
+  private buildRequestOptions(config: AIServiceConfig): { baseUrl: string } | undefined {
+    const raw = config.baseUrl?.trim();
+    if (!raw) return undefined;
+    const normalized = raw.replace(/\/+$/, '').replace(/\/v1(beta)?$/i, '');
+    if (!normalized || normalized === 'https://generativelanguage.googleapis.com') return undefined;
+    return { baseUrl: normalized };
+  }
+
   private convertMessages(messages: ChatMessage[]): { history: any[], systemInstruction?: string } {
     // Gemini使用不同的消息格式
     const history = [];
@@ -78,11 +91,11 @@ export class GeminiAdapter implements AIServiceAdapter {
         generationConfig.stopSequences = Array.isArray(config.stop) ? config.stop : [config.stop];
       }
 
-      const model = client.getGenerativeModel({ 
+      const model = client.getGenerativeModel({
         model: config.model,
         systemInstruction: systemInstruction || undefined,
         generationConfig
-      });
+      }, this.buildRequestOptions(config));
 
       // 如果有历史记录，使用聊天会话
       if (history.length > 1) {
@@ -171,11 +184,11 @@ export class GeminiAdapter implements AIServiceAdapter {
         generationConfig.stopSequences = Array.isArray(config.stop) ? config.stop : [config.stop];
       }
 
-      const model = client.getGenerativeModel({ 
+      const model = client.getGenerativeModel({
         model: config.model,
         systemInstruction: systemInstruction || undefined,
         generationConfig
-      });
+      }, this.buildRequestOptions(config));
 
       console.log('[Gemini] 开始调用API...');
       let result;
