@@ -78,7 +78,8 @@ export class XAIAdapter implements AIServiceAdapter {
         throw new AIServiceError('No response content', 'xai');
       }
 
-      const reasoningContent = (choice.message as any).reasoning_content;
+      // 尊重用户开关：未开启扩展思考时不展示模型返回的推理内容
+      const reasoningContent = config.enableThinking ? (choice.message as any).reasoning_content : undefined;
       const reasoningTokens = (response.usage as any)?.completion_tokens_details?.reasoning_tokens;
 
       return {
@@ -140,7 +141,7 @@ export class XAIAdapter implements AIServiceAdapter {
 
       for await (const chunk of stream as any) {
         const choice = chunk.choices[0];
-        if (choice?.delta?.reasoning_content) {
+        if (config.enableThinking && choice?.delta?.reasoning_content) {
           yield {
             content: '',
             done: false,

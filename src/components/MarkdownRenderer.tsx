@@ -74,8 +74,10 @@ export default function MarkdownRenderer({ content, className = '' }: MarkdownRe
         components={{
           code: ({ inline, className: codeClassName, children, ...props }: any) => {
             const match = /language-(\w+)/.exec(codeClassName || '');
-            return !inline && match ? (
-              <CodeBlock language={match[1]} codeClassName={codeClassName} {...props}>
+            // react-markdown v9+ 不再传 inline；无语言标签的围栏块靠换行符识别
+            const isBlock = !inline && (match || /\n/.test(extractText(children)));
+            return isBlock ? (
+              <CodeBlock language={match?.[1] ?? 'text'} codeClassName={codeClassName} {...props}>
                 {children}
               </CodeBlock>
             ) : (

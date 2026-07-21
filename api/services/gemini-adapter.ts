@@ -249,21 +249,28 @@ export class GeminiAdapter implements AIServiceAdapter {
       console.log('[Gemini] API调用成功，开始处理流式响应...');
       let chunkCount = 0;
       let totalContent = '';
-      
+      let sawThought = false;
+      let latestThoughtTokens: number | undefined;
+
       for await (const chunk of result.stream) {
         try {
           chunkCount++;
+          // 完整的 thoughtsTokenCount 通常在最后一个（纯正文）chunk 的
+          // usageMetadata 里，因此每个 chunk 都要采集
+          const chunkThoughtTokens = (chunk as any).usageMetadata?.thoughtsTokenCount;
+          if (typeof chunkThoughtTokens === 'number') latestThoughtTokens = chunkThoughtTokens;
+
           if (config.enableThinking) {
             // 思维与正文混在 parts 中，逐块拆分并分别下发
             const { thought, text } = this.splitParts((chunk as any).candidates?.[0]?.content?.parts);
-            const thoughtTokens = (chunk as any).usageMetadata?.thoughtsTokenCount;
             if (thought) {
+              sawThought = true;
               yield {
                 content: '',
                 done: false,
                 model: config.model,
                 provider: 'gemini',
-                thinking: { content: thought, done: false, tokens: thoughtTokens }
+                thinking: { content: thought, done: false, tokens: latestThoughtTokens }
               };
             }
             if (text) {
@@ -301,12 +308,13 @@ export class GeminiAdapter implements AIServiceAdapter {
       }
       
       console.log(`[Gemini] 流式响应完成，总共${chunkCount}个chunk，总长度:${totalContent.length}`);
-      
+
       yield {
         content: '',
         done: true,
         model: config.model,
-        provider: 'gemini'
+        provider: 'gemini',
+        ...(sawThought ? { thinking: { content: '', done: true, tokens: latestThoughtTokens } } : {})
       };
     } catch (error: any) {
       console.error('[Gemini] 流式聊天出错:', {

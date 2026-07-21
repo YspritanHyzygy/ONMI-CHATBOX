@@ -92,6 +92,20 @@ describe('ClaudeAdapter thinking', () => {
     expect(params.temperature).toBe(0.7);
   });
 
+  it('never sends temperature and top_p together (newer Claude models reject the pair)', async () => {
+    anthropicCreateMock.mockResolvedValue({
+      model: 'claude-sonnet-5',
+      content: [{ type: 'text', text: 'ok' }],
+      usage: { input_tokens: 1, output_tokens: 1 }
+    });
+
+    await new ClaudeAdapter().chat(messages, claudeConfig({ temperature: 0.7, topP: 0.9 }));
+
+    const params = anthropicCreateMock.mock.calls[0][0];
+    expect(params.temperature).toBe(0.7);
+    expect(params.top_p).toBeUndefined();
+  });
+
   it('yields thinking and signature deltas from the stream', async () => {
     anthropicCreateMock.mockResolvedValue((async function* () {
       yield { type: 'content_block_delta', delta: { type: 'thinking_delta', thinking: 'hmm ' } };

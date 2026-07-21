@@ -3,6 +3,7 @@ import { Sliders, RotateCcw, AlertTriangle } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { getValidatedAIParameters, setStorageItem } from '../lib/storage';
 import { fetchWithAuth } from '../lib/fetch';
+import { supportsThinking, thinkingControlKind } from '../lib/thinking-support';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
@@ -50,17 +51,18 @@ interface ProviderLimits {
   repetitionPenalty?: { min: number; max: number; default: number };
 }
 
+// 与 src/lib/model-parameters/data/*.json 的基线保持一致（2026-07 现役模型）
 const FALLBACK_LIMITS: Record<string, ProviderLimits> = {
   openai: {
     temperature: { min: 0.0, max: 2.0, recommended: 0.7 },
-    maxTokens: { min: 1, max: 4096, default: 4000 },
+    maxTokens: { min: 1, max: 128000, default: 8192 },
     topP: { min: 0.0, max: 1.0, default: 1.0 },
     frequencyPenalty: { min: -2.0, max: 2.0, default: 0.0 },
     presencePenalty: { min: -2.0, max: 2.0, default: 0.0 },
   },
   claude: {
     temperature: { min: 0.0, max: 1.0, recommended: 0.7 },
-    maxTokens: { min: 1, max: 8192, default: 4000 },
+    maxTokens: { min: 1, max: 64000, default: 8192 },
     topP: { min: 0.0, max: 1.0, default: 1.0 },
     topK: { min: 1, max: 500, default: 5 },
   },
@@ -72,7 +74,7 @@ const FALLBACK_LIMITS: Record<string, ProviderLimits> = {
   },
   xai: {
     temperature: { min: 0.0, max: 1.0, recommended: 0.7 },
-    maxTokens: { min: 1, max: 4096, default: 4000 },
+    maxTokens: { min: 1, max: 65536, default: 8192 },
     topP: { min: 0.0, max: 1.0, default: 1.0 },
     frequencyPenalty: { min: -2.0, max: 2.0, default: 0.0 },
     presencePenalty: { min: -2.0, max: 2.0, default: 0.0 },
@@ -106,35 +108,6 @@ const isResearchModel = (model?: string): boolean => {
   if (!model) return false;
   const m = model.toLowerCase();
   return m.includes('research') || m.includes('o3-deep-research') || m.includes('o4-mini-deep-research');
-};
-
-/** 该模型是否显示"扩展思考"区块（Ollama 模型动态获取，恒显示并加注释） */
-const supportsThinking = (provider?: string, model?: string): boolean => {
-  const m = (model || '').toLowerCase();
-  switch (provider) {
-    case 'claude':
-      return /claude-(3-7|[a-z]+-[45])/.test(m);
-    case 'gemini':
-      return /gemini-(2\.5|3)/.test(m);
-    case 'openai':
-      return /^(o[134]|gpt-5)/.test(m);
-    case 'xai':
-      return /grok-(3-mini|4)/.test(m);
-    case 'ollama':
-      return true;
-    default:
-      return false;
-  }
-};
-
-/** 思考控制形态：budget 滑杆（Claude）、effort 分档（OpenAI/Gemini 3/grok-3-mini）、仅开关（其余） */
-const thinkingControlKind = (provider?: string, model?: string): 'budget' | 'effort' | 'toggle' => {
-  const m = (model || '').toLowerCase();
-  if (provider === 'claude') return 'budget';
-  if (provider === 'openai') return 'effort';
-  if (provider === 'gemini' && /^gemini-3/.test(m)) return 'effort';
-  if (provider === 'xai' && /grok-3-mini/.test(m)) return 'effort';
-  return 'toggle';
 };
 
 const EFFORT_LEVELS: Array<'minimal' | 'low' | 'medium' | 'high'> = ['minimal', 'low', 'medium', 'high'];
@@ -487,7 +460,23 @@ export default function AIParametersPanel({ onParametersChange, className = '', 
                     </div>
                     <Switch
                       checked={parameters.enableThinking ?? false}
-                      onCheckedChange={(checked) => updateParameter('enableThinking', checked)}
+                      onCheckedChange={(checked) => {
+                        // effort 型控件把未选中显示为 Medium——开启时立即落成显式值，
+                        // 保证界面显示与实际发送的参数一致
+                        const needsEffortDefault = checked
+                          && !parameters.reasoningEffort
+                          && thinkingControlKind(selectedModel?.provider, selectedModel?.model) === 'effort';
+                        const next = {
+                          ...parameters,
+                          enableThinking: checked,
+                          ...(needsEffortDefault ? { reasoningEffort: 'medium' as const } : {}),
+                        };
+                        setParameters(next);
+                        validateParameters(next);
+                        onParametersChange(next);
+                        const result = setStorageItem('ai-parameters', next);
+                        if (!result.success) console.error('Failed to save AI parameters:', result.error);
+                      }}
                     />
                   </div>
 

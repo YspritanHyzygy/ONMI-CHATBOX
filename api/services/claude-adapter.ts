@@ -43,6 +43,17 @@ export class ClaudeAdapter implements AIServiceAdapter {
     requestParams.max_tokens = Math.max(requestParams.max_tokens ?? 0, budget + 1024);
   }
 
+  /**
+   * 新一代 Claude 模型（Sonnet 4.5+/Sonnet 5 等）拒绝同时指定 temperature 和
+   * top_p，而前端两者恒有值。二者并存时保留 temperature（Anthropic 推荐的
+   * 主要采样参数），丢弃 top_p。
+   */
+  private dropConflictingSamplingParams(requestParams: any): void {
+    if (requestParams.temperature !== undefined && requestParams.top_p !== undefined) {
+      delete requestParams.top_p;
+    }
+  }
+
   private convertMessages(messages: ChatMessage[]): { messages: any[], system?: string } {
     const systemMessages = messages.filter(msg => msg.role === 'system');
     const userMessages = messages.filter(msg => msg.role !== 'system');
@@ -77,9 +88,13 @@ export class ClaudeAdapter implements AIServiceAdapter {
       }
 
       this.applyThinkingParams(requestParams, config);
+      this.dropConflictingSamplingParams(requestParams);
 
+      // 大 thinking 预算会推高 max_tokens；显式给出超时，避免 SDK 对非流式
+      // 长请求（约 >21k tokens）直接抛 "Streaming is required" 错误。
       const response = await client.messages.create(requestParams, {
-        signal: (config as AbortableConfig).signal
+        signal: (config as AbortableConfig).signal,
+        ...(config.enableThinking ? { timeout: 60 * 60 * 1000 } : {})
       });
 
       // content 数组可能为空，或以非 text 块开头（如 thinking 块）——找第一个 text 块
@@ -143,6 +158,7 @@ export class ClaudeAdapter implements AIServiceAdapter {
       }
 
       this.applyThinkingParams(streamParams, config);
+      this.dropConflictingSamplingParams(streamParams);
 
       const stream = await client.messages.create(streamParams, {
         signal: (config as AbortableConfig).signal

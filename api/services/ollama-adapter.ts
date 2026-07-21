@@ -191,6 +191,9 @@ export class OllamaAdapter implements AIServiceAdapter {
       let buffer = '';
       let completed = false;
       const tagParser = config.enableThinking ? new ThinkTagParser() : null;
+      // 模型走原生 thinking 通道后关闭标签兜底，避免正文里出现的字面 <think>
+      // 文本（如模型引用该标签）被误拆（与非流式路径的 !thinking 门控一致）
+      let sawNativeThinking = false;
 
       const consumeLine = (line: string): OllamaChatChunk | undefined => {
         const trimmed = line.trim();
@@ -202,6 +205,7 @@ export class OllamaAdapter implements AIServiceAdapter {
         const out: StreamResponse[] = [];
         const model = chunk.model || config.model;
         if (chunk.message?.thinking) {
+          sawNativeThinking = true;
           out.push({
             content: '',
             done: false,
@@ -212,7 +216,7 @@ export class OllamaAdapter implements AIServiceAdapter {
         }
         const rawContent = chunk.message?.content || '';
         if (rawContent) {
-          const { thought, content } = tagParser
+          const { thought, content } = tagParser && !sawNativeThinking
             ? tagParser.feed(rawContent)
             : { thought: '', content: rawContent };
           if (thought) {

@@ -76,7 +76,7 @@ OLLAMA_BASE_URL=http://localhost:11434
 OLLAMA_DEFAULT_MODEL=qwen3
 ```
 
-上述模型 ID 已于 2026 年 7 月对照各 Provider 文档核实。可在设置页拉取模型列表查看你的 Key 实际可用的模型，并用 `node scripts/update-openai-data.cjs` / `node scripts/update-gemini-data.cjs` 刷新内置的参数数据。
+上述模型 ID 已于 2026 年 7 月对照各 Provider 文档核实。可在设置页拉取模型列表查看你的 Key 实际可用的模型。（`scripts/update-*-data.cjs` 可重新生成内置参数数据，但其内置回退目录落后于 `src/lib/model-parameters/data/` 里的精选文件——提交其输出前请先审查 diff。）
 
 Ollama 应填写服务根地址，例如 `http://localhost:11434`，不要附加 `/v1`。ONMI 会兼容并规范化旧的 `/v1` 配置，聊天和模型列表统一使用 Ollama 原生接口。
 

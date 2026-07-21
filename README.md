@@ -76,7 +76,7 @@ OLLAMA_BASE_URL=http://localhost:11434
 OLLAMA_DEFAULT_MODEL=qwen3
 ```
 
-Model IDs above were verified against provider documentation in July 2026. Use the model-list fetch in Settings to see what your key can actually access, and `node scripts/update-openai-data.cjs` / `node scripts/update-gemini-data.cjs` to refresh the bundled parameter data.
+Model IDs above were verified against provider documentation in July 2026. Use the model-list fetch in Settings to see what your key can actually access. (The `scripts/update-*-data.cjs` helpers can regenerate the bundled parameter data, but their built-in fallback catalogs lag behind the curated files in `src/lib/model-parameters/data/` — review the diff before committing their output.)
 
 For Ollama, use the server root such as `http://localhost:11434`, not `/v1`. ONMI normalizes older `/v1` values and uses Ollama's native chat and model endpoints.
 

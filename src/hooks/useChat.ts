@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { fetchWithAuth, isPageTearingDown } from '@/lib/fetch';
+import { sanitizeThinkingParams } from '@/lib/thinking-support';
 import {
   getValidatedConversations,
   getValidatedModel,
@@ -769,7 +770,8 @@ export function useChat() {
         message: text,
         provider: selectedModel.provider,
         model: selectedModel.model,
-        parameters: aiParameters,
+        // 不支持思考的模型剥除思维参数（localStorage 可能残留其他模型的开关）
+        parameters: sanitizeThinkingParams(aiParameters, selectedModel.provider, selectedModel.model),
       };
       if (isSavedConversation) body.conversationId = existing!.id;
 
@@ -947,7 +949,7 @@ export function useChat() {
         body: JSON.stringify({
           provider: selectedModel.provider,
           model: selectedModel.model,
-          parameters: aiParameters,
+          parameters: sanitizeThinkingParams(aiParameters, selectedModel.provider, selectedModel.model),
         }),
         signal: controller.signal,
       });

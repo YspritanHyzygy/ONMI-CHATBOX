@@ -412,6 +412,20 @@ describe('JSON Database - Corruption Recovery', () => {
     db.clearLocks();
   });
 
+  it('completes an interrupted restore instead of creating an empty database', async () => {
+    await seedDatabaseWithUser();
+    // Simulate a crash between the two renames of tryRestoreFromBackup:
+    // dbPath is gone, the staged restore file is present.
+    await fs.rename(dbPath, `${dbPath}.restore.tmp`);
+
+    const db = new JSONDatabase(dbPath);
+    await db.init();
+
+    const { data: user } = await db.findUserById('restore-user-001');
+    expect(user?.username).toBe('restore-user-001');
+    db.clearLocks();
+  });
+
   it('still fails startup when no valid backup exists', async () => {
     await seedDatabaseWithUser();
     // Seeding itself produces write backups; remove them so no restore source exists.

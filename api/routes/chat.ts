@@ -406,7 +406,11 @@ async function executeAssistantTurn(res: Response, context: AssistantTurnContext
         content: '',
         done: true,
         model: responseModel,
-        provider: actualProvider
+        provider: actualProvider,
+        // effort 只在请求侧存在，随收尾事件下发，客户端无需等重新拉取消息
+        ...(thinkingContent && aiConfig.enableThinking && aiConfig.reasoningEffort
+          ? { thinking: { content: '', done: true, effort: aiConfig.reasoningEffort } }
+          : {})
       });
       res.write('data: [DONE]\n\n');
       res.end();

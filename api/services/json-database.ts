@@ -361,6 +361,17 @@ export class JSONDatabase {
             throw error;
           }
 
+          // 恢复流程若恰好在两次 rename 之间崩溃，会留下 .restore.tmp 而
+          // dbPath 缺失——此时必须先完成换位，绝不能新建空库覆盖用户数据。
+          const stagingPath = `${this.dbPath}.restore.tmp`;
+          const stagingExists = await fs.access(stagingPath).then(() => true).catch(() => false);
+          if (stagingExists) {
+            await fs.rename(stagingPath, this.dbPath);
+            console.warn('[JSONDatabase] Completed an interrupted backup restore from .restore.tmp');
+            await this.loadData();
+            return;
+          }
+
           await this.createInitialData();
           await this.saveData();
           return;
@@ -416,9 +427,15 @@ export class JSONDatabase {
         }
         if (!this.validateDatabaseSchema(parsed)) continue;
 
+        // 顺序保证任何时刻 dbPath 都存在文件：先把备份内容写到临时文件，
+        // 损坏文件挪走后立即把临时文件换位进来。若中途崩溃，dbPath 上要么
+        // 还是损坏文件（下次启动重走恢复），要么已是恢复后的文件——绝不会
+        // 出现 ENOENT 导致 init() 静默新建空库。
         const corruptPath = `${this.dbPath}.corrupt.${Date.now()}`;
+        const stagingPath = `${this.dbPath}.restore.tmp`;
+        await fs.copyFile(candidate.fullPath, stagingPath);
         await fs.rename(this.dbPath, corruptPath);
-        await fs.copyFile(candidate.fullPath, this.dbPath);
+        await fs.rename(stagingPath, this.dbPath);
         this.dataCache = null;
         await this.loadData();
         console.warn(
@@ -1262,8 +1279,11 @@ export class JSONDatabase {
           throw new DatabaseError('Conversation ID is required', 'INVALID_PARAM');
         }
 
+        // 与 getMessagesByConversationId 保持相同的 created_at 排序，
+        // 确保删除的正是 UI 中显示为最后一条的消息
         const conversationMessages = this.data.messages
-          .filter(message => message.conversation_id === conversationId);
+          .filter(message => message.conversation_id === conversationId)
+          .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
         const lastMessage = conversationMessages[conversationMessages.length - 1];
         if (!lastMessage || lastMessage.role !== 'assistant') {
           return { data: null, error: null };
