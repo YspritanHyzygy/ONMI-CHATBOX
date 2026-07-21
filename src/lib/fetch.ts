@@ -7,7 +7,7 @@ import useAuthStore from '../store/authStore';
 // 整页导航/关闭时，浏览器会直接终止在途 fetch（reject 为 "Failed to fetch"），
 // 但组件级 AbortController 不会触发。用该标志区分真实网络错误与页面拆除。
 let pageTearingDown = false;
-if (typeof window !== 'undefined') {
+if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
   window.addEventListener('pagehide', () => { pageTearingDown = true; });
   window.addEventListener('pageshow', () => { pageTearingDown = false; });
 }

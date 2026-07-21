@@ -5,6 +5,7 @@
 import { AIProvider, AIServiceConfig } from './types.js';
 import { jsonDatabase } from './json-database.js';
 import { getSafeErrorMessage } from './error-utils.js';
+import { DEFAULT_MODEL_BY_PROVIDER, DEFAULT_BASE_URL_BY_PROVIDER, resolveDefaultModel } from './provider-defaults.js';
 
 export function normalizeOllamaBaseUrl(baseUrl?: string): string {
   const value = (baseUrl || 'http://localhost:11434').trim();
@@ -154,32 +155,32 @@ export class ConfigManager {
     const envConfigs: Record<string, any> = {
       'openai': process.env.OPENAI_API_KEY ? {
         api_key: process.env.OPENAI_API_KEY,
-        base_url: process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1',
-        default_model: process.env.OPENAI_DEFAULT_MODEL || 'gpt-4o',
+        base_url: process.env.OPENAI_BASE_URL || DEFAULT_BASE_URL_BY_PROVIDER.openai,
+        default_model: resolveDefaultModel('openai', process.env.OPENAI_DEFAULT_MODEL),
         provider_name: 'openai'
       } : null,
       'gemini': process.env.GEMINI_API_KEY ? {
         api_key: process.env.GEMINI_API_KEY,
-        base_url: process.env.GEMINI_BASE_URL || 'https://generativelanguage.googleapis.com',
-        default_model: process.env.GEMINI_DEFAULT_MODEL || 'gemini-2.0-flash-exp',
+        base_url: process.env.GEMINI_BASE_URL || DEFAULT_BASE_URL_BY_PROVIDER.gemini,
+        default_model: resolveDefaultModel('gemini', process.env.GEMINI_DEFAULT_MODEL),
         provider_name: 'gemini'
       } : null,
       'claude': process.env.CLAUDE_API_KEY ? {
         api_key: process.env.CLAUDE_API_KEY,
-        base_url: process.env.CLAUDE_BASE_URL || 'https://api.anthropic.com',
-        default_model: process.env.CLAUDE_DEFAULT_MODEL || 'claude-3-5-sonnet-20241022',
+        base_url: process.env.CLAUDE_BASE_URL || DEFAULT_BASE_URL_BY_PROVIDER.claude,
+        default_model: resolveDefaultModel('claude', process.env.CLAUDE_DEFAULT_MODEL),
         provider_name: 'claude'
       } : null,
       'xai': process.env.XAI_API_KEY ? {
         api_key: process.env.XAI_API_KEY,
-        base_url: process.env.XAI_BASE_URL || 'https://api.x.ai/v1',
-        default_model: process.env.XAI_DEFAULT_MODEL || 'grok-2-1212',
+        base_url: process.env.XAI_BASE_URL || DEFAULT_BASE_URL_BY_PROVIDER.xai,
+        default_model: resolveDefaultModel('xai', process.env.XAI_DEFAULT_MODEL),
         provider_name: 'xai'
       } : null,
       'ollama': {
         api_key: '',
-        base_url: process.env.OLLAMA_BASE_URL || 'http://localhost:11434',
-        default_model: process.env.OLLAMA_DEFAULT_MODEL || 'llama3.3',
+        base_url: process.env.OLLAMA_BASE_URL || DEFAULT_BASE_URL_BY_PROVIDER.ollama,
+        default_model: resolveDefaultModel('ollama', process.env.OLLAMA_DEFAULT_MODEL),
         provider_name: 'ollama'
       }
     };
@@ -191,40 +192,15 @@ export class ConfigManager {
    * 获取默认配置
    */
   private getDefaultConfig(provider: string): any | null {
-    const defaultConfigs: Record<string, any> = {
-      'openai': {
-        api_key: '',
-        base_url: 'https://api.openai.com/v1',
-        default_model: 'gpt-4o',
-        provider_name: 'openai'
-      },
-      'claude': {
-        api_key: '',
-        base_url: 'https://api.anthropic.com',
-        default_model: 'claude-3-5-sonnet-20241022',
-        provider_name: 'claude'
-      },
-      'gemini': {
-        api_key: '',
-        base_url: 'https://generativelanguage.googleapis.com',
-        default_model: 'gemini-2.0-flash-exp',
-        provider_name: 'gemini'
-      },
-      'xai': {
-        api_key: '',
-        base_url: 'https://api.x.ai/v1',
-        default_model: 'grok-2-1212',
-        provider_name: 'xai'
-      },
-      'ollama': {
-        api_key: '',
-        base_url: 'http://localhost:11434',
-        default_model: 'llama3.3',
-        provider_name: 'ollama'
-      }
+    const defaultModel = DEFAULT_MODEL_BY_PROVIDER[provider];
+    const defaultBaseUrl = DEFAULT_BASE_URL_BY_PROVIDER[provider];
+    if (!defaultModel || !defaultBaseUrl) return null;
+    return {
+      api_key: '',
+      base_url: defaultBaseUrl,
+      default_model: defaultModel,
+      provider_name: provider
     };
-
-    return defaultConfigs[provider] || null;
   }
 
   /**

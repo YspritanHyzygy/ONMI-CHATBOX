@@ -173,7 +173,7 @@ export default function ProviderSettings({
                               body: JSON.stringify({
                                 message: t('settings.responsesApiTestMessage'),
                                 provider: 'openai',
-                                model: providerConfig.model || 'gpt-4o',
+                                model: providerConfig.model || 'gpt-5.5',
                                 parameters: {
                                   temperature: 0.7,
                                   maxTokens: 50,

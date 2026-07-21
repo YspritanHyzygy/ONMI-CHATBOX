@@ -10,40 +10,42 @@ import { resolveAuthenticatedUserId } from '../middleware/auth.js';
 import { sanitizeProviderExtraConfig } from '../services/provider-config-safety.js';
 import { getSafeErrorMessage, sanitizeErrorMessage } from '../services/error-utils.js';
 import { isProviderConfigUsable } from '../services/config-manager.js';
+import { DEFAULT_MODEL_BY_PROVIDER, DEFAULT_BASE_URL_BY_PROVIDER, resolveDefaultModel } from '../services/provider-defaults.js';
 
 const router = Router();
 
 // 支持的AI服务提供商列表 - 使用系统预设的默认模型列表
+// 模型 ID 核对时间：2026-07。用户仍可通过"获取模型列表"拉取账号实际可用的模型。
 const SUPPORTED_PROVIDERS = [
   {
     name: 'openai',
     displayName: 'OpenAI',
-    defaultModels: ['gpt-5', 'o3', 'o3-mini', 'gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo'],
-    defaultBaseUrl: 'https://api.openai.com/v1'
+    defaultModels: [DEFAULT_MODEL_BY_PROVIDER.openai, 'gpt-5.3-codex', 'gpt-5.3-codex-spark'],
+    defaultBaseUrl: DEFAULT_BASE_URL_BY_PROVIDER.openai
   },
   {
     name: 'claude',
     displayName: 'Anthropic Claude',
-    defaultModels: ['claude-opus-4-1-20250805', 'claude-opus-4-20250514', 'claude-sonnet-4-20250514', 'claude-3-7-sonnet-20250219', 'claude-3-5-haiku-20241022'],
-    defaultBaseUrl: 'https://api.anthropic.com'
+    defaultModels: [DEFAULT_MODEL_BY_PROVIDER.claude, 'claude-opus-4-8', 'claude-haiku-4-5-20251001'],
+    defaultBaseUrl: DEFAULT_BASE_URL_BY_PROVIDER.claude
   },
   {
     name: 'gemini',
     displayName: 'Google Gemini',
-    defaultModels: ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash', 'gemini-2.0-flash-lite'],
-    defaultBaseUrl: 'https://generativelanguage.googleapis.com'
+    defaultModels: [DEFAULT_MODEL_BY_PROVIDER.gemini, 'gemini-3.1-pro', 'gemini-2.5-pro', 'gemini-2.5-flash'],
+    defaultBaseUrl: DEFAULT_BASE_URL_BY_PROVIDER.gemini
   },
   {
     name: 'xai',
     displayName: 'xAI Grok',
-    defaultModels: ['grok-4', 'grok-3', 'grok-2-1212', 'grok-2-vision-1212'],
-    defaultBaseUrl: 'https://api.x.ai/v1'
+    defaultModels: [DEFAULT_MODEL_BY_PROVIDER.xai, 'grok-4.3', 'grok-4-fast', 'grok-3'],
+    defaultBaseUrl: DEFAULT_BASE_URL_BY_PROVIDER.xai
   },
   {
     name: 'ollama',
     displayName: 'Ollama',
     defaultModels: [], // Ollama模型需要动态获取，不设置默认模型
-    defaultBaseUrl: 'http://localhost:11434'
+    defaultBaseUrl: DEFAULT_BASE_URL_BY_PROVIDER.ollama
   }
 ];
 
@@ -55,22 +57,22 @@ function getEnvironmentProviderSummary(providerName: string): {
     case 'openai':
       return {
         configured: Boolean(process.env.OPENAI_API_KEY?.trim()),
-        defaultModel: process.env.OPENAI_DEFAULT_MODEL?.trim() || 'gpt-4o'
+        defaultModel: resolveDefaultModel('openai', process.env.OPENAI_DEFAULT_MODEL)
       };
     case 'claude':
       return {
         configured: Boolean(process.env.CLAUDE_API_KEY?.trim()),
-        defaultModel: process.env.CLAUDE_DEFAULT_MODEL?.trim() || 'claude-3-5-sonnet-20241022'
+        defaultModel: resolveDefaultModel('claude', process.env.CLAUDE_DEFAULT_MODEL)
       };
     case 'gemini':
       return {
         configured: Boolean(process.env.GEMINI_API_KEY?.trim()),
-        defaultModel: process.env.GEMINI_DEFAULT_MODEL?.trim() || 'gemini-2.0-flash-exp'
+        defaultModel: resolveDefaultModel('gemini', process.env.GEMINI_DEFAULT_MODEL)
       };
     case 'xai':
       return {
         configured: Boolean(process.env.XAI_API_KEY?.trim()),
-        defaultModel: process.env.XAI_DEFAULT_MODEL?.trim() || 'grok-2-1212'
+        defaultModel: resolveDefaultModel('xai', process.env.XAI_DEFAULT_MODEL)
       };
     case 'ollama':
       return {
@@ -78,7 +80,7 @@ function getEnvironmentProviderSummary(providerName: string): {
         // its address explicitly. The built-in localhost default alone should
         // not make an unavailable service look configured in the UI.
         configured: Boolean(process.env.OLLAMA_BASE_URL?.trim()),
-        defaultModel: process.env.OLLAMA_DEFAULT_MODEL?.trim() || 'llama3.3'
+        defaultModel: resolveDefaultModel('ollama', process.env.OLLAMA_DEFAULT_MODEL)
       };
     default:
       return { configured: false, defaultModel: '' };

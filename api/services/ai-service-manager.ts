@@ -19,6 +19,7 @@ import {
 import { modelParameterService } from '../../src/lib/model-parameters/index.js';
 import type { ProviderLimits } from '../../src/lib/model-parameters/types.js';
 import { getSafeErrorMessage } from './error-utils.js';
+import { DEFAULT_MODEL_BY_PROVIDER, DEFAULT_BASE_URL_BY_PROVIDER } from './provider-defaults.js';
 
 export class AIServiceManager {
   private adapters: Map<AIProvider, AIServiceAdapter> = new Map();
@@ -170,43 +171,43 @@ export class AIServiceManager {
     // 静态默认配置作为fallback
     const staticDefaults: Record<AIProvider, Partial<AIServiceConfig>> = {
       openai: {
-        model: 'gpt-4o',
-        baseUrl: 'https://api.openai.com/v1',
+        model: DEFAULT_MODEL_BY_PROVIDER.openai,
+        baseUrl: DEFAULT_BASE_URL_BY_PROVIDER.openai,
         temperature: 0.7,
         maxTokens: 4000,
         topP: 1.0
       },
       claude: {
-        model: 'claude-3-5-sonnet-20241022',
-        baseUrl: 'https://api.anthropic.com',
+        model: DEFAULT_MODEL_BY_PROVIDER.claude,
+        baseUrl: DEFAULT_BASE_URL_BY_PROVIDER.claude,
         temperature: 0.7,
         maxTokens: 4000,
         topP: undefined
       },
       gemini: {
-        model: 'gemini-2.0-flash-exp',
-        baseUrl: 'https://generativelanguage.googleapis.com',
+        model: DEFAULT_MODEL_BY_PROVIDER.gemini,
+        baseUrl: DEFAULT_BASE_URL_BY_PROVIDER.gemini,
         temperature: 0.7,
         topP: 0.95
       },
       xai: {
-        model: 'grok-2-1212',
-        baseUrl: 'https://api.x.ai/v1',
+        model: DEFAULT_MODEL_BY_PROVIDER.xai,
+        baseUrl: DEFAULT_BASE_URL_BY_PROVIDER.xai,
         temperature: 0.7,
         maxTokens: 4000,
         topP: 1.0
       },
       ollama: {
-        model: 'llama3.3',
-        baseUrl: 'http://localhost:11434',
+        model: DEFAULT_MODEL_BY_PROVIDER.ollama,
+        baseUrl: DEFAULT_BASE_URL_BY_PROVIDER.ollama,
         temperature: 0.7,
         maxTokens: 4000,
         topP: 1.0
       },
       // 内部使用的默认配置，不暴露给用户
       'openai-responses': {
-        model: 'gpt-4o', // 使用标准模型作为默认，避免使用可能不存在的研究模型
-        baseUrl: 'https://api.openai.com/v1',
+        model: DEFAULT_MODEL_BY_PROVIDER.openai, // 使用标准模型作为默认，避免使用可能不存在的研究模型
+        baseUrl: DEFAULT_BASE_URL_BY_PROVIDER.openai,
         temperature: 0.7,
         maxTokens: 100000,
         topP: 1.0,
@@ -394,6 +395,6 @@ export class AIServiceManager {
 export const aiServiceManager = new AIServiceManager();
 
 // 确保模型参数服务在应用启动时初始化
-aiServiceManager.getModelLimits('openai', 'gpt-4o').catch(() => {
+aiServiceManager.getModelLimits('openai', DEFAULT_MODEL_BY_PROVIDER.openai).catch(() => {
   // 静默处理初始化错误
 });

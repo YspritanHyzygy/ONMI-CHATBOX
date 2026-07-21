@@ -11,7 +11,12 @@ export interface ModelEntry {
 export function convertModelIdToDisplayName(modelId: string): string {
     // 特殊映射表，处理不规则的转换
     const specialMappings: Record<string, string> = {
-        // OpenAI 模型
+        // OpenAI 模型（2026-07 现役）
+        'gpt-5.5': 'GPT-5.5',
+        'gpt-5.3-codex': 'GPT-5.3 Codex',
+        'gpt-5.3-codex-spark': 'GPT-5.3 Codex Spark',
+
+        // OpenAI 历史模型（保留用于旧会话展示）
         'gpt-4o': 'GPT-4o',
         'gpt-4o-mini': 'GPT-4o Mini',
         'gpt-4-turbo': 'GPT-4 Turbo',
@@ -20,7 +25,12 @@ export function convertModelIdToDisplayName(modelId: string): string {
         'o3-mini': 'o3 Mini',
         'gpt-5': 'GPT-5',
 
-        // Claude 模型
+        // Claude 模型（2026-07 现役）
+        'claude-sonnet-5': 'Claude Sonnet 5',
+        'claude-opus-4-8': 'Claude Opus 4.8',
+        'claude-haiku-4-5-20251001': 'Claude Haiku 4.5',
+
+        // Claude 历史模型（保留用于旧会话展示）
         'claude-3-5-sonnet-20241022': 'Claude 3.5 Sonnet',
         'claude-3-5-haiku-20241022': 'Claude 3.5 Haiku',
         'claude-opus-4-1-20250805': 'Claude Opus 4.1',
@@ -28,7 +38,9 @@ export function convertModelIdToDisplayName(modelId: string): string {
         'claude-sonnet-4-20250514': 'Claude Sonnet 4',
         'claude-3-7-sonnet-20250219': 'Claude 3.7 Sonnet',
 
-        // Gemini 模型
+        // Gemini 模型（2026-07 现役）
+        'gemini-3.5-flash': 'Gemini 3.5 Flash',
+        'gemini-3.1-pro': 'Gemini 3.1 Pro',
         'gemini-2.5-pro': 'Gemini 2.5 Pro',
         'gemini-2.5-flash': 'Gemini 2.5 Flash',
         'gemini-2.5-flash-lite': 'Gemini 2.5 Flash-Lite',
@@ -39,7 +51,10 @@ export function convertModelIdToDisplayName(modelId: string): string {
         'gemini-1.5-flash': 'Gemini 1.5 Flash',
         'gemini-1.5-flash-8b': 'Gemini 1.5 Flash-8B',
 
-        // xAI Grok 模型
+        // xAI Grok 模型（2026-07 现役）
+        'grok-4.5': 'Grok 4.5',
+        'grok-4.3': 'Grok 4.3',
+        'grok-4-fast': 'Grok 4 Fast',
         'grok-4': 'Grok 4',
         'grok-3': 'Grok 3',
         'grok-2-1212': 'Grok 2 (1212)',

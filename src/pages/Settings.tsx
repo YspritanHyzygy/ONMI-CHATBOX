@@ -184,10 +184,11 @@ export default function Settings() {
               ],
             };
             const modelLists: Record<KnownProviderId, (string | { id?: string; name?: string; [key: string]: unknown })[]> = {
-              openai: ['gpt-5', 'o3', 'o3-mini', 'gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo'],
-              claude: ['claude-opus-4-1-20250805', 'claude-opus-4-20250514', 'claude-sonnet-4-20250514', 'claude-3-7-sonnet-20250219', 'claude-3-5-haiku-20241022'],
-              gemini: ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash', 'gemini-2.0-flash-lite'],
-              xai: ['grok-4', 'grok-3', 'grok-2-1212', 'grok-2-vision-1212'],
+              // 2026-07 现役模型；用户可通过"获取模型列表"拉取账号真实可用清单
+              openai: ['gpt-5.5', 'gpt-5.3-codex', 'gpt-5.3-codex-spark'],
+              claude: ['claude-sonnet-5', 'claude-opus-4-8', 'claude-haiku-4-5-20251001'],
+              gemini: ['gemini-3.5-flash', 'gemini-3.1-pro', 'gemini-2.5-pro', 'gemini-2.5-flash'],
+              xai: ['grok-4.5', 'grok-4.3', 'grok-4-fast', 'grok-3'],
               ollama: [],
             };
             return {
