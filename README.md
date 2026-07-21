@@ -1,5 +1,8 @@
 # ONMI Chatbox
 
+[![Verify](https://github.com/YspritanHyzygy/ONMI-CHATBOX/actions/workflows/verify.yml/badge.svg)](https://github.com/YspritanHyzygy/ONMI-CHATBOX/actions/workflows/verify.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 ONMI Chatbox is a local-first, bring-your-own-key AI chat workspace for OpenAI, Anthropic Claude, Google Gemini, xAI, and Ollama. A React/Vite client talks to an Express API, while accounts, sessions, provider settings, conversations, and messages stay in a local JSON database.
 
 [简体中文](README.zh-CN.md)
@@ -9,14 +12,18 @@ ONMI Chatbox is a local-first, bring-your-own-key AI chat workspace for OpenAI, 
 ## Current capabilities
 
 - Local accounts with user-scoped conversations and restart-safe sessions.
-- Streaming chat over server-sent events (SSE).
+- Streaming chat over server-sent events (SSE), with stop and one-click regenerate.
+- Extended thinking / reasoning chain display for Claude, Gemini, Ollama reasoning models, and xAI, with per-request budget or effort controls; the chain streams live and is persisted with each message. (OpenAI Chat Completions applies `reasoning_effort` but does not expose the chain itself.)
 - Provider and model configuration from the UI, with environment-variable fallbacks.
 - Conversation history, search, rename, delete, fork, and Markdown transcript export.
+- Per-code-block copy with language labels; edit any of your messages back into the composer.
 - Safe JSON backups that exclude API credentials by default.
 - Import preview and confirmation for destructive or credential-bearing restores.
-- Read-only database health reporting for migration and integrity issues.
+- Read-only database health reporting for migration and integrity issues; automatic restore from the newest valid backup if the database file is ever corrupted.
 - Local request/token estimates. Provider dashboards remain the billing source of truth.
 - English and Simplified Chinese UI.
+
+Keyboard shortcuts: `Ctrl+N` new session, `Ctrl+K` or `/` message templates, `Esc` close panels, `Enter` send, `Shift+Enter` newline.
 
 ## Requirements
 
@@ -52,22 +59,24 @@ UI settings take precedence over environment fallbacks for the signed-in user.
 ```env
 OPENAI_API_KEY=
 OPENAI_BASE_URL=https://api.openai.com/v1
-OPENAI_DEFAULT_MODEL=gpt-5
+OPENAI_DEFAULT_MODEL=gpt-5.5
 
 CLAUDE_API_KEY=
 CLAUDE_BASE_URL=https://api.anthropic.com
-CLAUDE_DEFAULT_MODEL=claude-sonnet-4
+CLAUDE_DEFAULT_MODEL=claude-sonnet-5
 
 GEMINI_API_KEY=
-GEMINI_DEFAULT_MODEL=gemini-2.5-pro
+GEMINI_DEFAULT_MODEL=gemini-3.5-flash
 
 XAI_API_KEY=
 XAI_BASE_URL=https://api.x.ai/v1
-XAI_DEFAULT_MODEL=grok-4
+XAI_DEFAULT_MODEL=grok-4.5
 
 OLLAMA_BASE_URL=http://localhost:11434
-OLLAMA_DEFAULT_MODEL=llama-4-scout
+OLLAMA_DEFAULT_MODEL=qwen3
 ```
+
+Model IDs above were verified against provider documentation in July 2026. Use the model-list fetch in Settings to see what your key can actually access, and `node scripts/update-openai-data.cjs` / `node scripts/update-gemini-data.cjs` to refresh the bundled parameter data.
 
 For Ollama, use the server root such as `http://localhost:11434`, not `/v1`. ONMI normalizes older `/v1` values and uses Ollama's native chat and model endpoints.
 
@@ -143,6 +152,7 @@ Notable endpoints:
 - `POST /api/auth/register`, `POST /api/auth/login`, `GET /api/auth/me`, `POST /api/auth/logout`
 - `GET /api/chat/conversations`, `PATCH /api/chat/conversations/:id`, `DELETE /api/chat/conversations`
 - `GET /api/chat/conversations/:id/messages`, `POST /api/chat/conversations/:id/fork`, `POST /api/chat`
+- `POST /api/chat/conversations/:id/regenerate` — replay the last turn with a fresh reply
 - `GET /api/data/preview/:userId`, `GET /api/data/export/:userId`, `POST /api/data/import/:userId`
 - `GET /api/data/health`
 - `GET /api/business/usage/:userId`
@@ -162,4 +172,4 @@ Notable endpoints:
 - Never log provider credentials, raw session tokens, or complete sensitive request objects.
 - Keep `README.md` and `README.zh-CN.md` behaviorally synchronized.
 
-No project license is currently declared.
+Released under the [MIT License](LICENSE).
